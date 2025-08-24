@@ -1,0 +1,16 @@
+
+einops
+matplotlib
+numpy
+Pillow
+tensorboardX
+trimesh
+opencv-python
+numpy 
+pandas
+tqdm
+scipy
+wandb
+scikit-learn
+timm
+tensorboard

@@ -1,0 +1,69 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/opt/conda/envs/py38
+ENV CUDA_PATH=$CUDA_HOME
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=""
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX"
+
+# Install core system packages
+RUN apt-get update && apt-get install -y \
+    wget bzip2 ca-certificates \
+    python3.8 python3.8-dev python3-pip python3-setuptools \
+    git build-essential libgl1 libglib2.0-0 libsm6 libxext6 \
+    ninja-build \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Miniconda
+ENV CONDA_DIR=/opt/conda
+RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/conda.sh \
+  && mkdir -p $CONDA_DIR \
+  && bash /tmp/conda.sh -b -f -p $CONDA_DIR \
+  && rm /tmp/conda.sh \
+  && $CONDA_DIR/bin/conda clean -afy \
+  && ln -s $CONDA_DIR/etc/profile.d/conda.sh /etc/profile.d/conda.sh
+
+# Use bash login shell so conda is initialized
+SHELL ["bash", "-lc"]
+
+# Update conda and create Python 3.8 environment
+RUN conda tos accept && \
+    conda config --set ssl_verify false && \
+    conda update -n base -c defaults conda \
+      && conda create -y -n py38 python=3.8 \
+      && conda clean -afy
+
+# TODO: set ld path from conda_prefix
+
+RUN conda init 
+
+# Inside py38: upgrade pip and install PyTorch+CUDA
+RUN conda activate py38 && \
+    python3 -m pip install --upgrade pip setuptools wheel && \
+    conda config --set ssl_verify false && \
+    conda install -y cudatoolkit-dev=11.3 -c conda-forge 
+
+# Install PyTorch 1.12.0 with CUDA 11.3 (matching main Dockerfile)
+RUN conda activate py38 && \
+    python3 -m pip install torch==1.12.0+cu113 torchvision==0.13.0+cu113 torchaudio==0.12.0+cu113 \
+    --extra-index-url https://download.pytorch.org/whl/cu113
+
+# Install chamfer distance package (requires GPU for compilation)
+RUN conda activate py38 && \
+    python3 -m pip install git+https://github.com/otaheri/chamfer_distance
+
+# Install all Python dependencies individually (matching main Dockerfile)
+RUN conda activate py38 && \
+    python3 -m pip install einops matplotlib numpy Pillow tensorboardX trimesh opencv-python pandas tqdm scipy wandb scikit-learn timm tensorboard
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy the TULIP source code
+COPY . .
+
+# Launch with the conda env activated
+CMD ["bash", "-lc", "conda activate py38 && bash"]
