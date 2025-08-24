@@ -16,8 +16,9 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     git \
     wget \
-    curl \
+    curl python3-tk tk-dev \ 
     build-essential \
+    git build-essential libgl1 libglib2.0-0 libsm6 libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create symbolic link for python (python3 already exists)
@@ -37,7 +38,9 @@ RUN pip install git+https://github.com/otaheri/chamfer_distance
 WORKDIR /workspace
 
 # Install Python dependencies individually
-RUN pip install einops matplotlib numpy Pillow tensorboardX trimesh opencv-python pandas tqdm scipy wandb scikit-learn timm tensorboard
+RUN pip install einops matplotlib numpy Pillow tensorboardX \
+                trimesh opencv-python pandas tqdm scipy wandb \
+                scikit-learn timm tensorboard nuscenes-devkit
 
 # Set default command
 CMD ["/bin/bash"]

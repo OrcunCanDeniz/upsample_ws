@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     wget bzip2 ca-certificates \
     python3.8 python3.8-dev python3-pip python3-setuptools \
     git build-essential libgl1 libglib2.0-0 libsm6 libxext6 \
+    python3-tk tk-dev \
     ninja-build \
   && rm -rf /var/lib/apt/lists/*
 

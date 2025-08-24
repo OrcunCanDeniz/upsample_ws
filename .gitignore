@@ -1,6 +1,4 @@
 /experiment
 /trained
 /output_dir
-
-
-
+**/__pycache__/** 
