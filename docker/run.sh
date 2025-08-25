@@ -15,34 +15,32 @@ PROJECTS_LIST=("TULIP")
 # Outputs:
 #   A string of volume mount options for Docker
 populate_volumes() {
-    local project_name="$1"
-    local data_path="$HOME_DIR/$project_name/data"
-    local code_path="$HOME_DIR/$project_name"
-    local docker_code_path="/workspace/$project_name"
-    local volumes=""
+  local project_name="$1"
+  local data_path="$HOME_DIR/$project_name/data"
+  local code_path="$HOME_DIR/$project_name"
+  local docker_code_path="/workspace/$project_name"
+  local volumes=""
 
-    # Check if the data folder exists
-    if [ ! -d "$data_path" ]; then
-        # If no data folder, mount only the project directory
-        volumes="--volume=$code_path:$docker_code_path"
-    else
-        # Process symbolic links in the data folder if it exists
-        local all_softlinks
-        all_softlinks=$(find "$data_path" -type l)
-        for softlink in $all_softlinks; do
-            local original_file
-            local original_file_path
-            local softlink_in_docker
-            original_file=$(readlink "$softlink")
-            original_file_path=$(realpath "$original_file")
-            softlink_in_docker="$docker_code_path/data/$(basename "$softlink")"
-            volumes="$volumes --volume=$original_file_path:$softlink_in_docker"
-        done
-        # Always mount the project directory as well
-        volumes="$volumes --volume=$code_path:$docker_code_path"
-    fi
+  # 1) Mount the whole project FIRST (so later mounts can override paths inside it)
+  volumes="--volume=$code_path:$docker_code_path"
 
-    echo "$volumes"
+  # 2) If data/ exists, overlay each symlink target on top of its path in the container
+  if [ -d "$data_path" ]; then
+    # find symlinks robustly (handles spaces/newlines)
+    while IFS= read -r -d '' softlink; do
+      # path inside the container that the symlink lives at
+      local rel; rel="$(realpath --relative-to="$data_path" "$softlink")"
+      local softlink_in_docker="$docker_code_path/data/$rel"
+
+      # absolute host path of the link target
+      local target; target="$(readlink -f "$softlink")"
+
+      # overlay the real target over the symlink path
+      volumes="$volumes --volume=$target:$softlink_in_docker"
+    done < <(find "$data_path" -type l -print0)
+  fi
+
+  echo "$volumes"
 }
 
 TAG="latest"

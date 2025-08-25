@@ -13,7 +13,7 @@ def read_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_data_train', type=int, default=21000)
     parser.add_argument('--num_data_val', type=int, default=2500)
-    parser.add_argument("--input_path", type=str , default="/cluster/work/riner/users/biyang/dataset/KITTI/")
+    parser.add_argument("--input_path", type=str , default="./data/KITTI/")
     parser.add_argument("--output_path_name_train", type = str, default = "kitti_train")
     parser.add_argument("--output_path_name_val", type = str, default = "kitti_val")
     parser.add_argument("--create_val", action='store_true', default=False)
@@ -79,18 +79,23 @@ def readlines(filename):
     return lines
 
 def main(args):
+    # Set random seed for reproducibility
+    random.seed(42)
+    np.random.seed(42)
+    
     num_data_train = args.num_data_train
     num_data_val = args.num_data_val
     dir_name = os.path.dirname(args.input_path)
     output_dir_name_train = os.path.join(dir_name, args.output_path_name_train)
-    pathlib.Path(output_dir_name_train).mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir_name_train}")
+    p = pathlib.Path(output_dir_name_train).resolve()  
+    p.mkdir(parents=True, exist_ok=True)
     if args.create_val:
         output_dir_name_val = os.path.join(dir_name, args.output_path_name_val)
         pathlib.Path(output_dir_name_val).mkdir(parents=True, exist_ok=True)
 
     train_split_path = "./kitti_utils/train_files.txt"
-    val_split_path = "./kitti_utilsval_files.txt"
-
+    val_split_path = "./kitti_utils/val_files.txt"
     train_split = np.array(readlines(train_split_path), dtype = str)
     val_split = np.array(readlines(val_split_path), dtype = str)
 
