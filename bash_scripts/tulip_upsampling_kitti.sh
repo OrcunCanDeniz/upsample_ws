@@ -16,13 +16,13 @@ args=(
     --patch_unmerging # improve
     # Dataset
     --dataset_select kitti
-    --data_path_low_res ./dataset/KITTI/
-    --data_path_high_res ./dataset/KITTI/
+    --data_path_low_res ./data/KITTI/
+    --data_path_high_res ./data/KITTI/
     # WandB Parameters
     --run_name tulip_base
-    --entity myentity
+    --entity pnp_dnp
     # --wandb_disabled
-    --project_name experiment_kitti
+    --project_name upsample_kitti
     --output_dir ./experiment/kitti/tulip_base
     --img_size_low_res 16 1024
     --img_size_high_res 64 1024
@@ -32,4 +32,4 @@ args=(
     )
 
 # real batch size in training = batch_size * nproc_per_node
-torchrun --nproc_per_node=4 tulip/main_lidar_upsampling.py "${args[@]}"
+torchrun --nproc_per_node=2 tulip/main_lidar_upsampling.py "${args[@]}"

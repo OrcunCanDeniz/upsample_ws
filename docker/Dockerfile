@@ -31,8 +31,6 @@ RUN python -m pip install --upgrade pip
 RUN pip install torch==1.12.0+cu113 torchvision==0.13.0+cu113 torchaudio==0.12.0+cu113 \
     --extra-index-url https://download.pytorch.org/whl/cu113
 
-# Install chamfer distance package (requires GPU for compilation)
-RUN pip install git+https://github.com/otaheri/chamfer_distance
 
 # Set working directory
 WORKDIR /workspace
@@ -40,7 +38,11 @@ WORKDIR /workspace
 # Install Python dependencies individually
 RUN pip install einops matplotlib numpy Pillow tensorboardX \
                 trimesh opencv-python pandas tqdm scipy wandb \
-                scikit-learn timm tensorboard nuscenes-devkit
+                scikit-learn tensorboard nuscenes-devkit \
+                timm==0.6.12 \
+                "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+# Install chamfer distance package (requires GPU for compilation)
+RUN pip install git+https://github.com/otaheri/chamfer_distance
 
 # Set default command
 CMD ["/bin/bash"]

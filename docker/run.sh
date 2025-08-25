@@ -7,7 +7,7 @@ HOME_DIR="$HOME"
 
 
 # List of projects to mount into the Docker container
-PROJECTS_LIST=("TULIP")
+PROJECTS_LIST=("upsample_ws")
 
 # Function to generate Docker volume mount strings for a project
 # Arguments:

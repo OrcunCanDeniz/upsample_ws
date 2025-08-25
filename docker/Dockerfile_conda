@@ -58,7 +58,10 @@ RUN conda activate py38 && \
 
 # Install all Python dependencies individually (matching main Dockerfile)
 RUN conda activate py38 && \
-    python3 -m pip install einops matplotlib numpy Pillow tensorboardX trimesh opencv-python pandas tqdm scipy wandb scikit-learn timm tensorboard
+    python3 -m pip install einops matplotlib numpy Pillow tensorboardX trimesh \
+    opencv-python pandas tqdm scipy wandb scikit-learn timm tensorboard \
+    timm==0.6.12 \
+    "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 
 # Set working directory
 WORKDIR /workspace

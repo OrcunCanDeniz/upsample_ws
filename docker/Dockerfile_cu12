@@ -1,0 +1,101 @@
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu20.04
+
+# Add CUDA to bashrc
+RUN echo 'export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}' >> ~/.bashrc && \
+    echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
+
+# Set non-interactive mode for debconf to avoid prompts
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+
+# System locale
+# Important for UTF-8
+ENV LC_ALL=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US.UTF-8
+
+# Install basic dependencies in a single layer to reduce image size
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        apt-utils \
+        autoconf \
+        automake \
+        bash-completion \
+        bmon \
+        build-essential \
+        bzip2 \
+        ca-certificates \
+        curl \
+        debhelper \
+        devscripts \
+        fakeroot \
+        ffmpeg \
+        g++ \
+        gdb \
+        git \
+        graphviz \
+        htop \
+        iotop \
+        language-pack-en \
+        libglib2.0-0 \
+        libjpeg-dev \
+        libpng-dev \
+        libsm6 \
+        libssl-dev \
+        libtool \
+        libxext6 \
+        libxrender-dev \
+        locales \
+        locales-all \
+        pkg-config \
+        python3.9 \
+        python3.9-dev \
+        python3.9-distutils \
+    python3.9-venv \
+    python3-pip \
+    python3-tk \
+    tk-dev \
+        tree \
+        vim \
+        wget \
+        vim \
+        wget && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+
+
+# Install PyTorch with CUDA 12.8 support
+
+
+# Install Git-LFS
+RUN curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
+    apt-get install -y git-lfs && \
+    git lfs install
+
+# Disable CUDA network repositories to prevent installing newer CUDA versions
+RUN rm -f /etc/apt/sources.list.d/cuda* /etc/apt/sources.list.d/nvidia-ml*
+
+
+# Create symbolic link for python (python3 already exists)
+RUN ln -sf /usr/bin/python3.9 /usr/bin/python
+
+# Upgrade pip
+RUN python -m pip install --upgrade pip
+RUN pip install --pre torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
+
+
+# Set working directory
+WORKDIR /workspace
+
+# Install Python dependencies individually
+RUN pip install einops matplotlib numpy Pillow tensorboardX \
+                trimesh opencv-python pandas tqdm scipy wandb \
+                scikit-learn tensorboard nuscenes-devkit \
+                timm==0.6.12 \
+                numpy==1.24.6 \
+                "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+# Install chamfer distance package (requires GPU for compilation)
+RUN pip install git+https://github.com/otaheri/chamfer_distance
+
+# Set default command
+CMD ["/bin/bash"]
