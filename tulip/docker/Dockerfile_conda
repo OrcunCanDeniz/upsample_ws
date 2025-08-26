@@ -60,14 +60,20 @@ RUN conda activate py38 && \
 RUN conda activate py38 && \
     python3 -m pip install einops matplotlib numpy Pillow tensorboardX trimesh \
     opencv-python pandas tqdm scipy wandb scikit-learn timm tensorboard \
-    timm==0.6.12 \
+    timm==0.6.12 openmim==0.3.9 \
     "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+
+RUN conda activate py38 && \
+    python -m mim install "mmcv-full==1.7.0" && \
+    python -m mim install "mmdet==2.28.2" && \
+    python -m mim install "mmsegmentation==0.30.0"
+
+RUN conda activate py38 && \
+    git clone -b v1.0.0rc4 https://github.com/open-mmlab/mmdetection3d.git && \
+    cd mmdetection3d && pip install -v -e . 
 
 # Set working directory
 WORKDIR /workspace
-
-# Copy the TULIP source code
-COPY . .
 
 # Launch with the conda env activated
 CMD ["bash", "-lc", "conda activate py38 && bash"]

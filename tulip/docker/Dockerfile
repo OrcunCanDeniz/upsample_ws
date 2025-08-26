@@ -3,6 +3,7 @@ FROM nvidia/cuda:11.3.1-devel-ubuntu20.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
+ENV TORCH_CUDA_ARCH_LIST="7.0;8.0;8.6"
 ENV FORCE_CUDA=1
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_HOME=/usr/local/cuda
@@ -44,6 +45,13 @@ RUN pip install einops matplotlib numpy Pillow tensorboardX \
                 "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 # Install chamfer distance package (requires GPU for compilation)
 RUN pip install git+https://github.com/otaheri/chamfer_distance
+
+RUN pip install --no-cache-dir openmim==0.3.9 && \
+    python -m mim install "mmcv-full==1.7.0" && \
+    python -m mim install "mmdet==2.28.2" && \
+    python -m mim install "mmsegmentation==0.30.0"
+RUN git clone -b v1.0.0rc4 https://github.com/open-mmlab/mmdetection3d.git && \
+    cd mmdetection3d && pip install -v -e . 
 
 # Set default command
 CMD ["/bin/bash"]
