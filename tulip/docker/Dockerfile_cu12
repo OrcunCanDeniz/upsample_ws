@@ -12,6 +12,7 @@ RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selectio
 ENV LC_ALL=en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US.UTF-8
+ENV FORCE_CUDA=1
 
 # Install basic dependencies in a single layer to reduce image size
 RUN apt-get update -y && \
