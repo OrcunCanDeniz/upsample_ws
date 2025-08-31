@@ -82,8 +82,7 @@ def train_one_epoch(model: torch.nn.Module,
 
         with torch.cuda.amp.autocast():
             _, total_loss, pixel_loss = model(samples_low_res, cam_imgs, 
-                                              mats_dict, timestamps, samples_high_res,
-                                              samples_high_res, eval = False)
+                                              mats_dict, timestamps, samples_high_res)
 
         total_loss_value = total_loss.item()
         pixel_loss_value = pixel_loss.item()
@@ -177,8 +176,7 @@ def evaluate(data_loader, model, device, log_writer, args=None):
         # compute output
         with torch.cuda.amp.autocast():
             pred_img, _, _= model(samples_low_res, cam_imgs, 
-                                    mats_dict, timestamps, samples_high_res,
-                                    eval = True)
+                                    mats_dict, timestamps, samples_high_res)
 
             
         if log_writer is not None:

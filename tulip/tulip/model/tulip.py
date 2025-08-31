@@ -700,14 +700,10 @@ class TULIP(nn.Module):
         return loss, pixel_loss
 
     def forward(self, x, target, eval = False, mc_drop = False):
-        print(f"Input : {x.shape}")
         x = self.patch_embed(x) 
-        print(f"Patch Embed : {x.shape}")
         x = self.pos_drop(x) 
-        print(f"Pos Drop : {x.shape}")
         x_save = []
         for i, layer in enumerate(self.layers):
-            print(f"Base {i} : {x.shape}")
             x_save.append(x)
             x = layer(x)
             
@@ -715,7 +711,6 @@ class TULIP(nn.Module):
 
 
         for i, layer in enumerate(self.layers_up):
-            print(f"Upsample {i} : {x.shape}")
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
             x = self.skip_connection_layers[i](x)
             x = layer(x)
@@ -731,7 +726,6 @@ class TULIP(nn.Module):
             x = self.final_patch_expanding(x)
             x = rearrange(x, 'B H W C -> B C H W')
 
-        print(f"Decoder Pred : {x.shape}")
         x = self.decoder_pred(x.contiguous())
             
         if mc_drop:

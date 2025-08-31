@@ -1,0 +1,72 @@
+# Example CARLA Configuration for TULIP LiDAR Upsampling
+# This file shows how to configure TULIP for CARLA dataset
+
+# Model selection and architecture
+model:
+  select: 'tulip_large'  # Use large TULIP model for CARLA
+  
+  # Window and patch configuration
+  window_size: [2, 8]
+  patch_size: [1, 4]
+  
+  # Upsampling head options
+  pixel_shuffle: true
+  circular_padding: true
+  patch_unmerging: true
+  swin_v2: false
+
+
+# Dataset configuration for CARLA
+dataset:
+  select: 'carla'
+  img_size_low_res: [32, 2048]  # CARLA dimensions
+  img_size_high_res: [128, 2048]
+  in_chans: 1
+  data_path_low_res: './dataset/Carla/'
+  data_path_high_res: './dataset/Carla/'
+  
+  # Data processing options
+  save_pcd: false
+  log_transform: true
+  keep_close_scan: false
+  keep_far_scan: false
+
+# Training configuration
+training:
+  batch_size: 8
+  epochs: 600
+  accum_iter: 1
+  weight_decay: 0.01
+  blr: 1e-3
+  min_lr: 0.0
+  warmup_epochs: 60
+  
+  # Augmentation
+  roll: false
+  
+  # Checkpoint and logging
+  output_dir: './experiment/carla/tulip_large'
+  log_dir: './output_dir'
+  save_frequency: 100
+  num_workers: 2
+  pin_mem: true
+
+# Evaluation configuration
+evaluation:
+  mc_drop: true  # Enable Monte Carlo dropout
+  num_mcdropout_iterations: 50
+  noise_threshold: 0.03
+  grid_size: 0.1
+
+# Logging and monitoring
+logging:
+  wandb_disabled: false
+  entity: 'pnp_dnp'
+  project_name: 'upsample'
+  run_name: 'tulip_large_carla'
+
+# Device configuration
+device: 'cuda'
+seed: 0
+resume: ''
+start_epoch: 0

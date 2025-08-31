@@ -209,6 +209,7 @@ class RVWithImageDataset(Dataset):
                         img_std=[58.395, 57.12, 57.375],
                         to_rgb=True),
         info_file: str = None,
+        final_dim = (256, 704),
     ):
         # self.class_dir = class_dir
         super().__init__()
@@ -229,7 +230,35 @@ class RVWithImageDataset(Dataset):
         self.img_mean = np.array(img_conf['img_mean'], np.float32)
         self.img_std = np.array(img_conf['img_std'], np.float32)
         self.to_rgb = img_conf.get('to_rgb', True)
+        self.final_dim = final_dim
             
+    def img_transform(self, img):
+        W, H = img.size
+        fH, fW = self.final_dim
+        resize = max(fH / H, fW / W)
+        resize_dims = (int(W * resize), int(H * resize))
+        newW, newH = resize_dims
+        crop_h = int(newH) - fH
+        crop_w = int(max(0, newW - fW) / 2)
+        crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
+        
+        ida_rot = torch.eye(2)
+        ida_tran = torch.zeros(2)
+        # adjust image
+        img = img.resize(resize_dims)
+        img = img.crop(crop)
+
+        # post-homography transformation
+        ida_rot *= resize
+        ida_tran -= torch.Tensor(crop[:2])
+
+        ida_mat = ida_rot.new_zeros(4, 4)
+        ida_mat[3, 3] = 1
+        ida_mat[2, 2] = 1
+        ida_mat[:2, :2] = ida_rot
+        ida_mat[:2, 3] = ida_tran
+        return img, ida_mat
+        
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
         return [""], {"":0}
     
@@ -336,7 +365,7 @@ class RVWithImageDataset(Dataset):
                 intrin_mat[:3, :3] = torch.Tensor(
                     cam_info[cam]['calibrated_sensor']['camera_intrinsic'])
 
-                ida_mat = torch.eye(4) # TODO: change this if needed to add ida
+                img, ida_mat = self.img_transform(img)
                 ida_mats.append(ida_mat)
                 img = mmcv.imnormalize(np.array(img), self.img_mean,
                                        self.img_std, self.to_rgb)

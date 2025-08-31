@@ -6,14 +6,14 @@ from einops import rearrange
 from typing import Optional, Tuple
 
 from functools import partial
-from tulip.util.filter import *
+from util.filter import *
 
-from tulip.util.evaluation import inverse_huber_loss
-from tulip.model.swin_transformer_v2 import SwinTransformerBlockV2, PatchMergingV2
+from util.evaluation import inverse_huber_loss
+from model.swin_transformer_v2 import SwinTransformerBlockV2, PatchMergingV2
 from .tulip import TULIP
 from bevdepth.layers.backbones.tulip_lss_fpn import BaseLSSFPN
 
-import collections.abc
+import pdb
 
 
 class TokenLearnerBEV(nn.Module):
@@ -77,17 +77,23 @@ class CMTULIP(TULIP):
     def __init__(self, backbone_config, **kwargs):
         super(CMTULIP, self).__init__(**kwargs)
 
-        self.multiview_backbone = BaseLSSFPN(**backbone_config)
-        self.token_learner = TokenLearnerBEV(C=embed_dim, K=16, hidden=128, temperature=1.0)
+        # TODO: Integrate the multiview backbone and token learner
+        # self.multiview_backbone = BaseLSSFPN(**backbone_config)
+        # self.token_learner = TokenLearnerBEV(C=96, K=16, hidden=128, temperature=1.0)
 
+        self.init = False
         self.apply(self.init_weights)
 
 
-    def forward(self, x, in_imgs, mats_dict, timestamps, target, eval = False, mc_drop = False):
+    def forward(self, x, in_imgs, mats_dict, timestamps, target, mc_drop = False):
+        if self.init:
+            # self.multiview_backbone.eval()
+            self.init = True
         
         # get depth features
-        bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
-        bev_tokens = self.token_learner(bev_feat)
+        # with torch.no_grad():
+        #     bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
+        # bev_tokens = self.token_learner(bev_feat)
 
         x = self.patch_embed(x) 
         x = self.pos_drop(x) 
