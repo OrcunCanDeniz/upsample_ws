@@ -67,7 +67,6 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
             range_intensity_map = converter(lidar_pts)
             np.save(rv_out_path, range_intensity_map.astype(np.float32))
             
-            
             lidar_datas.append(lidar_data)
             sweep_lidar_info = dict()
             sweep_lidar_info['sample_token'] = lidar_data['sample_token']
@@ -77,10 +76,10 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
             sweep_lidar_info['filename'] = lidar_data['filename']
             sweep_lidar_info['calibrated_sensor'] = nusc.get(
                 'calibrated_sensor', lidar_data['calibrated_sensor_token'])
-            lidar_infos[lidar_name] = sweep_lidar_info
+            sweep_lidar_info['rv_path'] = "/".join(rv_out_path.split('/')[-2:]) # SPLIT_rv/RV.npy
 
             info['cam_infos'] = cam_infos
-            info['lidar_infos'] = lidar_infos
+            info['lidar_info'] = sweep_lidar_info
             # for i in range(max_cam_sweeps):
             #     cam_sweeps.append(dict())
 
@@ -104,14 +103,14 @@ def main():
     val_scenes = splits.val
     train_infos = generate_info(trainval_nusc, train_scenes, 'train', data_root)
     val_infos = generate_info(trainval_nusc, val_scenes, 'val', data_root)
-    mmcv.dump(train_infos, os.path.join(data_root, 'nuscenes_infos_train.pkl'))
-    mmcv.dump(val_infos, os.path.join(data_root, 'nuscenes_infos_val.pkl'))
+    mmcv.dump(train_infos, os.path.join(data_root, 'nuscenes_upsample_infos_train.pkl'))
+    mmcv.dump(val_infos, os.path.join(data_root, 'nuscenes_upsample_infos_val.pkl'))
     test_nusc = NuScenes(version='v1.0-test',
                          dataroot=data_root,
                          verbose=True)
     test_scenes = splits.test
     test_infos = generate_info(test_nusc, test_scenes, 'test', data_root)
-    mmcv.dump(test_infos, os.path.join(data_root, 'nuscenes_infos_test.pkl'))
+    mmcv.dump(test_infos, os.path.join(data_root, 'nuscenes_upsample_infos_test.pkl'))
 
 
 if __name__ == '__main__':
