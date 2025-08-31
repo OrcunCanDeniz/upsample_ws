@@ -37,6 +37,10 @@ def px_to_xyz(px, p_range, cols): # px: (u, v) size = (H*W,2)
     z_sensor = z_lidar + lidar_to_sensor_z_offset
     return np.stack((x_sensor, y_sensor, z_sensor), axis=-1)
 
+def img_to_pcd_nuscenes(img_range, maximum_range = 80):
+    raise NotImplementedError("Not implemented")
+
+
 def img_to_pcd_durlar(img_range, maximum_range = 120):  # 1 x H x W cuda torch
     rows, cols = img_range.shape[:2]
     uu, vv = np.meshgrid(np.arange(cols), np.arange(rows), indexing="ij")

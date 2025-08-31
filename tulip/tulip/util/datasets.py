@@ -13,6 +13,7 @@ import PIL
 from PIL import Image
 
 from torchvision import transforms
+from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder, DatasetFolder
 import torch
 
@@ -20,6 +21,7 @@ import torch.utils.data as data
 import torch.nn.functional as F
 from pyquaternion import Quaternion
 import mmcv
+from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from PIL import Image
 
 from timm.data import create_transform
@@ -36,7 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 import numpy as np
 import torch
 from torchvision.datasets.vision import VisionDataset
-import copy
+import pdb
 from pathlib import Path
 
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp', '.jpx')
@@ -196,34 +198,45 @@ def rimg_loader(path: str) -> np.ndarray:
     return np.flip(range_image).astype(np.float32)
 
 
-class RangeMapFolder(DatasetFolder):
+class RVWithImageDataset(Dataset):
     def __init__(
         self,
         root: str,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
+        high_res_transform: Optional[Callable] = None,
+        low_res_transform: Optional[Callable] = None,
         loader: Callable[[str], Any] = npy_loader,
-        is_valid_file: Optional[Callable[[str], bool]] = None,
-        class_dir: bool = True,
-        img_conf: dict = None,
+        img_conf = dict(img_mean=[123.675, 116.28, 103.53],
+                        img_std=[58.395, 57.12, 57.375],
+                        to_rgb=True),
+        info_file: str = None,
     ):
-        self.class_dir = class_dir
-        super().__init__(
-            root,
-            loader,
-            NPY_EXTENSIONS if is_valid_file is None else None,
-            transform=transform,
-            target_transform=target_transform,
-            is_valid_file=is_valid_file,
-        )
-        self.imgs = self.samples
-
-        self.with_img = img_conf is not None
-        if self.with_img:
-            self.img_mean = np.array(img_conf['img_mean'], np.float32)
-            self.img_std = np.array(img_conf['img_std'], np.float32)
+        # self.class_dir = class_dir
+        super().__init__()
+        
+        self.data_root = root
+        self.info_path = info_file
+        self.split = 'train' if 'train' in info_file else 'val'
+        info_path = os.path.join(self.data_root, self.info_path)
+        self.infos = mmcv.load(info_path)
+        self.cam_names = [
+                'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT', 'CAM_BACK',
+                'CAM_BACK_LEFT', 'CAM_FRONT_LEFT'
+            ]
+        self.high_res_transform = high_res_transform
+        self.low_res_transform = low_res_transform
+        self.loader = loader
+        
+        self.img_mean = np.array(img_conf['img_mean'], np.float32)
+        self.img_std = np.array(img_conf['img_std'], np.float32)
+        self.to_rgb = img_conf.get('to_rgb', True)
             
-    def get_image(self, cam_infos, cams, lidar_infos=None):
+    def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
+        return [""], {"":0}
+    
+    def __len__(self):
+        return len(self.infos)
+    
+    def get_image(self, cam_infos, cams):
         """Given data and cam_names, return image data needed.
 
         Args:
@@ -240,14 +253,15 @@ class RangeMapFolder(DatasetFolder):
             Tensor: timestamps.
             dict: meta infos needed for evaluation.
         """
+        cam_infos = [cam_infos]
         assert len(cam_infos) > 0
+
         sweep_imgs = list()
         sweep_sensor2ego_mats = list()
         sweep_intrin_mats = list()
         sweep_ida_mats = list()
         sweep_sensor2sensor_mats = list()
         sweep_timestamps = list()
-        sweep_lidar_depth = list()
 
         for cam in cams:
             imgs = list()
@@ -256,13 +270,12 @@ class RangeMapFolder(DatasetFolder):
             ida_mats = list()
             sensor2sensor_mats = list()
             timestamps = list()
-            lidar_depth = list()
             key_info = cam_infos[0]
-            resize, resize_dims, crop, flip, \
-                rotate_ida = self.sample_ida_augmentation(
-                    )
+            # TODO: change this if needed to add ida
+            # resize, resize_dims, crop, flip, \
+            #     rotate_ida = self.sample_ida_augmentation(
+            #         )
             for sweep_idx, cam_info in enumerate(cam_infos):
-
                 img = Image.open(
                     os.path.join(self.data_root, cam_info[cam]['filename']))
                 # img = Image.fromarray(img)
@@ -323,14 +336,7 @@ class RangeMapFolder(DatasetFolder):
                 intrin_mat[:3, :3] = torch.Tensor(
                     cam_info[cam]['calibrated_sensor']['camera_intrinsic'])
 
-                img, ida_mat = img_transform(
-                    img,
-                    resize=resize,
-                    resize_dims=resize_dims,
-                    crop=crop,
-                    flip=flip,
-                    rotate=rotate_ida,
-                )
+                ida_mat = torch.eye(4) # TODO: change this if needed to add ida
                 ida_mats.append(ida_mat)
                 img = mmcv.imnormalize(np.array(img), self.img_mean,
                                        self.img_std, self.to_rgb)
@@ -344,8 +350,7 @@ class RangeMapFolder(DatasetFolder):
             sweep_ida_mats.append(torch.stack(ida_mats))
             sweep_sensor2sensor_mats.append(torch.stack(sensor2sensor_mats))
             sweep_timestamps.append(torch.tensor(timestamps))
-            if self.return_depth:
-                sweep_lidar_depth.append(torch.stack(lidar_depth))
+
         # Get mean pose of all cams.
         ego2global_rotation = np.mean(
             [key_info[cam]['ego_pose']['rotation'] for cam in cams], 0)
@@ -366,11 +371,125 @@ class RangeMapFolder(DatasetFolder):
             torch.stack(sweep_timestamps).permute(1, 0),
             img_metas,
         ]
-        if self.return_depth:
-            ret_list.append(torch.stack(sweep_lidar_depth).permute(1, 0, 2, 3))
+
+        return ret_list
+    
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        """
+        Args:
+            index (int): Index
+
+        Returns:
+            tuple: (sample, target) where target is class_index of the target class.
+        """
+        sample_info = self.infos[index]
+        rv_path = os.path.join(self.data_root, sample_info['lidar_info']['rv_path'])
+        rv_sample = self.loader(rv_path)
+        low_res_rv = self.low_res_transform(rv_sample)
+        high_res_rv = self.high_res_transform(rv_sample)
+
+            
+        image_list = self.get_image(sample_info['cam_infos'], self.cam_names)
+        (
+            sweep_imgs,
+            sweep_sensor2ego_mats,
+            sweep_intrins,
+            sweep_ida_mats,
+            sweep_sensor2sensor_mats,
+            sweep_timestamps,
+            img_metas,
+        ) = image_list[:7]
+        img_metas['token'] = sample_info['sample_token']
+        bda_mat = torch.eye(4)
+        ret_list = [
+            sweep_imgs,
+            sweep_sensor2ego_mats,
+            sweep_intrins,
+            sweep_ida_mats,
+            sweep_sensor2sensor_mats,
+            bda_mat,
+            sweep_timestamps,
+            img_metas,
+            low_res_rv,
+            high_res_rv,
+        ]
+
         return ret_list
 
+def collate_fn(data):
+    imgs_batch = list()
+    sensor2ego_mats_batch = list()
+    intrin_mats_batch = list()
+    ida_mats_batch = list()
+    sensor2sensor_mats_batch = list()
+    bda_mat_batch = list()
+    timestamps_batch = list()
+    img_metas_batch = list()
+    lr_rv_samples_batch = list()
+    hr_rv_samples_batch = list()
+    
+    for iter_data in data:
+        (
+            sweep_imgs,
+            sweep_sensor2ego_mats,
+            sweep_intrins,
+            sweep_ida_mats,
+            sweep_sensor2sensor_mats,
+            bda_mat,
+            sweep_timestamps,
+            img_metas,
+            lr_rv_sample,
+            hr_rv_sample,
+        ) = iter_data[:11]
+        
+        imgs_batch.append(sweep_imgs)
+        sensor2ego_mats_batch.append(sweep_sensor2ego_mats)
+        intrin_mats_batch.append(sweep_intrins)
+        ida_mats_batch.append(sweep_ida_mats)
+        sensor2sensor_mats_batch.append(sweep_sensor2sensor_mats)
+        bda_mat_batch.append(bda_mat)
+        timestamps_batch.append(sweep_timestamps)
+        img_metas_batch.append(img_metas)
+        lr_rv_samples_batch.append(lr_rv_sample)
+        hr_rv_samples_batch.append(hr_rv_sample)
+    mats_dict = dict()
+    mats_dict['sensor2ego_mats'] = torch.stack(sensor2ego_mats_batch)
+    mats_dict['intrin_mats'] = torch.stack(intrin_mats_batch)
+    mats_dict['ida_mats'] = torch.stack(ida_mats_batch)
+    mats_dict['sensor2sensor_mats'] = torch.stack(sensor2sensor_mats_batch)
+    mats_dict['bda_mat'] = torch.stack(bda_mat_batch)
+    ret_list = [
+        torch.stack(imgs_batch),
+        mats_dict,
+        torch.stack(timestamps_batch),
+        img_metas_batch,
+        torch.stack(lr_rv_samples_batch),
+        torch.stack(hr_rv_samples_batch),
+    ]
 
+    return ret_list
+
+class RangeMapFolder(DatasetFolder):
+    def __init__(
+        self,
+        root: str,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        loader: Callable[[str], Any] = npy_loader,
+        is_valid_file: Optional[Callable[[str], bool]] = None,
+        class_dir: bool = True,
+    ):
+        self.class_dir = class_dir
+        super().__init__(
+            root,
+            loader,
+            NPY_EXTENSIONS if is_valid_file is None else None,
+            transform=transform,
+            target_transform=target_transform,
+            is_valid_file=is_valid_file,
+        )
+        self.imgs = self.samples
+            
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
         if self.class_dir:
             return super().find_classes(directory)    
@@ -392,10 +511,38 @@ class RangeMapFolder(DatasetFolder):
             sample = self.transform(sample)
         if self.target_transform is not None:
             target = self.target_transform(target)
-
+            
         return {'sample': sample,
                 'class':target,
                 'name': name}
+
+
+@register_dataset('nuscenes')
+def build_nuscenes_upsampling_dataset(is_train, log_transform = False):
+    input_size = (8,1024)
+    output_size = (32,1024)
+    
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/80)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/80)]
+
+    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0],))
+    if output_size[1] // input_size[1] > 1:
+        t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
+
+    if log_transform:
+        t_low_res.append(LogTransform())
+        t_high_res.append(LogTransform())
+
+    transform_low_res = transforms.Compose(t_low_res)
+    transform_high_res = transforms.Compose(t_high_res)        
+    
+    info_file = "nuscenes_upsample_infos_train.pkl" if is_train else "nuscenes_upsample_infos_val.pkl"
+
+    nusc_root = "./data/nuscenes"
+    dset = RVWithImageDataset(nusc_root, high_res_transform = transform_high_res, low_res_transform = transform_low_res, loader = npy_loader, info_file = info_file)
+
+    return dset
+
 
 @register_dataset('durlar')
 def build_durlar_upsampling_dataset(is_train, args):
@@ -524,3 +671,8 @@ def build_carla_upsampling_dataset(is_train, args):
 
     return carla_dataset
 
+if __name__ == "__main__":
+    dset = build_nuscenes_upsampling_dataset(True, None)
+    data = dset[0]
+    b_data = collate_fn([data])
+    pdb.set_trace()
