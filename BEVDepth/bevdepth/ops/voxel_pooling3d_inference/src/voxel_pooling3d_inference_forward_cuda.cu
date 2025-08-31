@@ -13,7 +13,8 @@ __global__ void voxel_pooling_inference_forward_kernel(
     int batch_size, int num_cams, int num_depth, int num_height, int num_width,
     int num_channels, int num_voxel_x, int num_voxel_y, int num_voxel_z,
     const int *geom_xyz, const half *depth_features,
-    const half *context_features, half *output_features) {
+    const half *depth_logits,
+    const half *context_features, half *output_features, half *uni_depth_logits_output) {
   const int bidx = blockIdx.x;
   const int tidx = threadIdx.x;
   const int tidy = threadIdx.y;
@@ -72,6 +73,12 @@ __global__ void voxel_pooling_inference_forward_kernel(
                         num_channels +
                     j],
                 __hmul(depth_val, context_val));
+      atomicAdd(&uni_depth_logits_output[
+                    (((batch_idx * num_voxel_z + sample_z) * num_voxel_y +
+                      sample_y) *
+                         num_voxel_x +
+                     sample_x) + j],
+                depth_val);
     }
   }
 }
@@ -79,8 +86,8 @@ __global__ void voxel_pooling_inference_forward_kernel(
 __global__ void voxel_pooling_inference_forward_kernel(
     int batch_size, int num_cams, int num_depth, int num_height, int num_width,
     int num_channels, int num_voxel_x, int num_voxel_y, int num_voxel_z,
-    const int *geom_xyz, const float *depth_features,
-    const float *context_features, float *output_features) {
+    const int *geom_xyz, const float *depth_features, const float *depth_logits,
+    const float *context_features, float *output_features, float *uni_depth_logits_output) {
   const int bidx = blockIdx.x;
   const int tidx = threadIdx.x;
   const int tidy = threadIdx.y;
@@ -139,6 +146,12 @@ __global__ void voxel_pooling_inference_forward_kernel(
                         num_channels +
                     j],
                 depth_val * context_val);
+      atomicAdd(&uni_depth_logits_output[
+                    (((batch_idx * num_voxel_z + sample_z) * num_voxel_y +
+                      sample_y) *
+                         num_voxel_x +
+                     sample_x) + j],
+                depth_val);
     }
   }
 }

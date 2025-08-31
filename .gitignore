@@ -1,4 +1,6 @@
 /experiment
 /trained
-/output_dir
+tulip/output_dir
 **/__pycache__/** 
+**/wandb/**
+**/.vscode/**

@@ -18,6 +18,9 @@ import torch
 
 import torch.utils.data as data
 import torch.nn.functional as F
+from pyquaternion import Quaternion
+import mmcv
+from PIL import Image
 
 from timm.data import create_transform
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
@@ -202,6 +205,7 @@ class RangeMapFolder(DatasetFolder):
         loader: Callable[[str], Any] = npy_loader,
         is_valid_file: Optional[Callable[[str], bool]] = None,
         class_dir: bool = True,
+        img_conf: dict = None,
     ):
         self.class_dir = class_dir
         super().__init__(
@@ -213,7 +217,159 @@ class RangeMapFolder(DatasetFolder):
             is_valid_file=is_valid_file,
         )
         self.imgs = self.samples
-        
+
+        self.with_img = img_conf is not None
+        if self.with_img:
+            self.img_mean = np.array(img_conf['img_mean'], np.float32)
+            self.img_std = np.array(img_conf['img_std'], np.float32)
+            
+    def get_image(self, cam_infos, cams, lidar_infos=None):
+        """Given data and cam_names, return image data needed.
+
+        Args:
+            sweeps_data (list): Raw data used to generate the data we needed.
+            cams (list): Camera names.
+
+        Returns:
+            Tensor: Image data after processing.
+            Tensor: Transformation matrix from camera to ego.
+            Tensor: Intrinsic matrix.
+            Tensor: Transformation matrix for ida.
+            Tensor: Transformation matrix from key
+                frame camera to sweep frame camera.
+            Tensor: timestamps.
+            dict: meta infos needed for evaluation.
+        """
+        assert len(cam_infos) > 0
+        sweep_imgs = list()
+        sweep_sensor2ego_mats = list()
+        sweep_intrin_mats = list()
+        sweep_ida_mats = list()
+        sweep_sensor2sensor_mats = list()
+        sweep_timestamps = list()
+        sweep_lidar_depth = list()
+
+        for cam in cams:
+            imgs = list()
+            sensor2ego_mats = list()
+            intrin_mats = list()
+            ida_mats = list()
+            sensor2sensor_mats = list()
+            timestamps = list()
+            lidar_depth = list()
+            key_info = cam_infos[0]
+            resize, resize_dims, crop, flip, \
+                rotate_ida = self.sample_ida_augmentation(
+                    )
+            for sweep_idx, cam_info in enumerate(cam_infos):
+
+                img = Image.open(
+                    os.path.join(self.data_root, cam_info[cam]['filename']))
+                # img = Image.fromarray(img)
+                w, x, y, z = cam_info[cam]['calibrated_sensor']['rotation']
+                # sweep sensor to sweep ego
+                sweepsensor2sweepego_rot = torch.Tensor(
+                    Quaternion(w, x, y, z).rotation_matrix)
+                sweepsensor2sweepego_tran = torch.Tensor(
+                    cam_info[cam]['calibrated_sensor']['translation'])
+                sweepsensor2sweepego = sweepsensor2sweepego_rot.new_zeros(
+                    (4, 4))
+                sweepsensor2sweepego[3, 3] = 1
+                sweepsensor2sweepego[:3, :3] = sweepsensor2sweepego_rot
+                sweepsensor2sweepego[:3, -1] = sweepsensor2sweepego_tran
+                # sweep ego to global
+                w, x, y, z = cam_info[cam]['ego_pose']['rotation']
+                sweepego2global_rot = torch.Tensor(
+                    Quaternion(w, x, y, z).rotation_matrix)
+                sweepego2global_tran = torch.Tensor(
+                    cam_info[cam]['ego_pose']['translation'])
+                sweepego2global = sweepego2global_rot.new_zeros((4, 4))
+                sweepego2global[3, 3] = 1
+                sweepego2global[:3, :3] = sweepego2global_rot
+                sweepego2global[:3, -1] = sweepego2global_tran
+
+                # global sensor to cur ego
+                w, x, y, z = key_info[cam]['ego_pose']['rotation']
+                keyego2global_rot = torch.Tensor(
+                    Quaternion(w, x, y, z).rotation_matrix)
+                keyego2global_tran = torch.Tensor(
+                    key_info[cam]['ego_pose']['translation'])
+                keyego2global = keyego2global_rot.new_zeros((4, 4))
+                keyego2global[3, 3] = 1
+                keyego2global[:3, :3] = keyego2global_rot
+                keyego2global[:3, -1] = keyego2global_tran
+                global2keyego = keyego2global.inverse()
+
+                # cur ego to sensor
+                w, x, y, z = key_info[cam]['calibrated_sensor']['rotation']
+                keysensor2keyego_rot = torch.Tensor(
+                    Quaternion(w, x, y, z).rotation_matrix)
+                keysensor2keyego_tran = torch.Tensor(
+                    key_info[cam]['calibrated_sensor']['translation'])
+                keysensor2keyego = keysensor2keyego_rot.new_zeros((4, 4))
+                keysensor2keyego[3, 3] = 1
+                keysensor2keyego[:3, :3] = keysensor2keyego_rot
+                keysensor2keyego[:3, -1] = keysensor2keyego_tran
+                keyego2keysensor = keysensor2keyego.inverse()
+                keysensor2sweepsensor = (
+                    keyego2keysensor @ global2keyego @ sweepego2global
+                    @ sweepsensor2sweepego).inverse()
+                sweepsensor2keyego = global2keyego @ sweepego2global @\
+                    sweepsensor2sweepego
+                sensor2ego_mats.append(sweepsensor2keyego)
+                sensor2sensor_mats.append(keysensor2sweepsensor)
+                intrin_mat = torch.zeros((4, 4))
+                intrin_mat[3, 3] = 1
+                intrin_mat[:3, :3] = torch.Tensor(
+                    cam_info[cam]['calibrated_sensor']['camera_intrinsic'])
+
+                img, ida_mat = img_transform(
+                    img,
+                    resize=resize,
+                    resize_dims=resize_dims,
+                    crop=crop,
+                    flip=flip,
+                    rotate=rotate_ida,
+                )
+                ida_mats.append(ida_mat)
+                img = mmcv.imnormalize(np.array(img), self.img_mean,
+                                       self.img_std, self.to_rgb)
+                img = torch.from_numpy(img).permute(2, 0, 1)
+                imgs.append(img)
+                intrin_mats.append(intrin_mat)
+                timestamps.append(cam_info[cam]['timestamp'])
+            sweep_imgs.append(torch.stack(imgs))
+            sweep_sensor2ego_mats.append(torch.stack(sensor2ego_mats))
+            sweep_intrin_mats.append(torch.stack(intrin_mats))
+            sweep_ida_mats.append(torch.stack(ida_mats))
+            sweep_sensor2sensor_mats.append(torch.stack(sensor2sensor_mats))
+            sweep_timestamps.append(torch.tensor(timestamps))
+            if self.return_depth:
+                sweep_lidar_depth.append(torch.stack(lidar_depth))
+        # Get mean pose of all cams.
+        ego2global_rotation = np.mean(
+            [key_info[cam]['ego_pose']['rotation'] for cam in cams], 0)
+        ego2global_translation = np.mean(
+            [key_info[cam]['ego_pose']['translation'] for cam in cams], 0)
+        img_metas = dict(
+            box_type_3d=LiDARInstance3DBoxes,
+            ego2global_translation=ego2global_translation,
+            ego2global_rotation=ego2global_rotation,
+        )
+
+        ret_list = [
+            torch.stack(sweep_imgs).permute(1, 0, 2, 3, 4),
+            torch.stack(sweep_sensor2ego_mats).permute(1, 0, 2, 3),
+            torch.stack(sweep_intrin_mats).permute(1, 0, 2, 3),
+            torch.stack(sweep_ida_mats).permute(1, 0, 2, 3),
+            torch.stack(sweep_sensor2sensor_mats).permute(1, 0, 2, 3),
+            torch.stack(sweep_timestamps).permute(1, 0),
+            img_metas,
+        ]
+        if self.return_depth:
+            ret_list.append(torch.stack(sweep_lidar_depth).permute(1, 0, 2, 3))
+        return ret_list
+
 
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
         if self.class_dir:

@@ -51,7 +51,8 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     url=None,
-    packages=find_packages(),
+    packages=find_packages(include=["bevdepth", "bevdepth.*"]),
+    include_package_data=True,
     classifiers=[
         'Programming Language :: Python :: 3',
         'Operating System :: OS Independent',

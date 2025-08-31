@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCH_CUDA_ARCH_LIST="7.0;8.0;8.6"
 ENV FORCE_CUDA=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/workspace/BEVDepth:/workspace/mmdetection3d
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
@@ -38,10 +39,10 @@ RUN pip install torch==1.12.0+cu113 torchvision==0.13.0+cu113 torchaudio==0.12.0
 WORKDIR /workspace
 
 # Install Python dependencies individually
-RUN pip install einops matplotlib numpy Pillow tensorboardX \
+RUN pip install einops matplotlib Pillow tensorboardX \
                 trimesh opencv-python pandas tqdm scipy wandb \
                 scikit-learn tensorboard nuscenes-devkit \
-                timm==0.6.12 \
+                timm==0.6.12  \ 
                 "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 # Install chamfer distance package (requires GPU for compilation)
 RUN pip install git+https://github.com/otaheri/chamfer_distance
@@ -52,6 +53,9 @@ RUN pip install --no-cache-dir openmim==0.3.9 && \
     python -m mim install "mmsegmentation==0.30.0"
 RUN git clone -b v1.0.0rc4 https://github.com/open-mmlab/mmdetection3d.git && \
     cd mmdetection3d && pip install -v -e . 
+
+RUN python -m pip install "pip<24.1"
+RUN pip install numpy==1.23.5 llvmlite==0.39.1 numba==0.56.4 pytorch-lightning==1.6.5
 
 # Set default command
 CMD ["/bin/bash"]

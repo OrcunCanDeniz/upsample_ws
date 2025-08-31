@@ -52,15 +52,20 @@ class BaseBEVDepth(nn.Module):
         Returns:
             tuple(list[dict]): Output results for tasks.
         """
+        import pdb; pdb.set_trace()
+        
         if self.is_train_depth and self.training:
             x, depth_pred = self.backbone(x,
                                           mats_dict,
                                           timestamps,
                                           is_return_depth=True)
+            pdb.set_trace()
             preds = self.head(x)
             return preds, depth_pred
         else:
             x = self.backbone(x, mats_dict, timestamps)
+            pdb.set_trace()
+            
             preds = self.head(x)
             return preds
 

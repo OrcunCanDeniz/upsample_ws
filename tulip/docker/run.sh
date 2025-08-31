@@ -7,7 +7,7 @@ HOME_DIR="$HOME"
 
 
 # List of projects to mount into the Docker container
-PROJECTS_LIST=("upsample_ws")
+PROJECTS_LIST=("tulip" "BEVDepth")
 
 # Function to generate Docker volume mount strings for a project
 # Arguments:
@@ -16,8 +16,8 @@ PROJECTS_LIST=("upsample_ws")
 #   A string of volume mount options for Docker
 populate_volumes() {
   local project_name="$1"
-  local data_path="$HOME_DIR/$project_name/data"
-  local code_path="$HOME_DIR/$project_name"
+  local data_path="$HOME_DIR/upsample_ws/$project_name/data"
+  local code_path="$HOME_DIR/upsample_ws/$project_name"
   local docker_code_path="/workspace/$project_name"
   local volumes=""
 
@@ -44,7 +44,7 @@ populate_volumes() {
 }
 
 TAG="latest"
-BUILD_NAME="tulip"
+BUILD_NAME="upsample"
 IMAGE_NAME="${BUILD_NAME,,}:${TAG,,}"
 CONTAINER_NAME="${BUILD_NAME,,}"
 

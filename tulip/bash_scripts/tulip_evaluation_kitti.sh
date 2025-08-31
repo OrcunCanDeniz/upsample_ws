@@ -11,13 +11,13 @@ args=(
     --log_transform
     # Dataset
     --dataset_select kitti
-    --data_path_low_res ./dataset/KITTI/
-    --data_path_high_res ./dataset/KITTI/
+    --data_path_low_res ./data/KITTI/
+    --data_path_high_res ./data/KITTI/
     # --save_pcd
     # WandB Parameters
     --run_name tulip_base
     --entity myentity
-    # --wandb_disabled
+    --wandb_disabled
     --project_name kitti_evaluation
     --output_dir ./trained/tulip_kitti.pth
     --img_size_low_res 16 1024

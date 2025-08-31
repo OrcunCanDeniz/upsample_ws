@@ -18,7 +18,9 @@ __global__ void voxel_pooling3d_train_forward_kernel(
     int num_voxel_x, int num_voxel_y, int num_voxel_z,
     const int* __restrict__ geom_xyz,         // (B * N, 3) -> x,y,z voxel indices per sample
     const T*  __restrict__ input_features,    // (B * N, C)
-    float*       __restrict__ output_features,   // (B, Z, Y, X, C) flattened
+    const T*  __restrict__ depth_logits,
+    T*       __restrict__ output_features,   // (B, Z, Y, X, C) flattened
+    T*       __restrict__ uni_depth_logits_output,
     int*      __restrict__ pos_memo           // (B * N, 4): b, z, y, x  (or left unset if invalid)
 ) {
   const int bidx = blockIdx.x;
@@ -85,6 +87,7 @@ __global__ void voxel_pooling3d_train_forward_kernel(
     for (int c = tidx; c < num_channels; c += THREADS_BLOCK_X) {
       const long long off = voxel_lin * (long long)num_channels + c;
       atomicAdd(&output_features[off], input_features[(long long)sample_idx * num_channels + c]);
+      atomicAdd(&uni_depth_logits_output[off], depth_logits[(long long)sample_idx]);
     }
   }
 }
@@ -94,7 +97,9 @@ void voxel_pooling3d_train_forward_kernel_launcher(
     int num_voxel_x, int num_voxel_y, int num_voxel_z,
     const int* geom_xyz,
     const float* input_features,
+    const float* depth_logits,
     float* output_features,
+    float* uni_depth_logits_output,
     int* pos_memo,
     cudaStream_t stream) {
 
@@ -105,7 +110,8 @@ void voxel_pooling3d_train_forward_kernel_launcher(
       <<<blocks, threads, 0, stream>>>(
           batch_size, num_points, num_channels,
           num_voxel_x, num_voxel_y, num_voxel_z,
-          geom_xyz, input_features, output_features, pos_memo);
+          geom_xyz, input_features, depth_logits, 
+          output_features, uni_depth_logits_output, pos_memo);
 
   cudaError_t err = cudaGetLastError();
   if (cudaSuccess != err) {
@@ -119,7 +125,9 @@ void voxel_pooling3d_train_forward_kernel_launcher(
     int num_voxel_x, int num_voxel_y, int num_voxel_z,
     const int* geom_xyz,
     const half* input_features,
-    float* output_features,
+    const half* depth_logits,
+    half* uni_depth_logits_output,
+    half* output_features,
     int* pos_memo,
     cudaStream_t stream) {
 
@@ -130,7 +138,8 @@ void voxel_pooling3d_train_forward_kernel_launcher(
       <<<blocks, threads, 0, stream>>>(
           batch_size, num_points, num_channels,
           num_voxel_x, num_voxel_y, num_voxel_z,
-          geom_xyz, input_features, output_features, pos_memo);
+          geom_xyz, input_features, depth_logits, 
+          uni_depth_logits_output, output_features, pos_memo);
 
   cudaError_t err = cudaGetLastError();
   if (cudaSuccess != err) {

@@ -539,22 +539,19 @@ class BaseLSSFPN(nn.Module):
                 img_feat_with_depth.shape[4],
             )
 
-            img_feat_with_depth = img_feat_with_depth.permute(0, 1, 3, 4, 5, 2)
-            import pdb; pdb.set_trace()
-            feature_map = voxel_pooling_train(geom_xyz,
-                                              img_feat_with_depth.contiguous(),
-                                              self.voxel_num.cuda())
+            depth_aware_feature_map = img_feat_with_depth.permute(0, 1, 3, 4, 5, 2)
+
+            
         else:
-            feature_map = voxel_pooling_inference(
-                geom_xyz, depth, depth_feature[:, self.depth_channels:(
-                    self.depth_channels + self.output_channels)].contiguous(),
-                self.voxel_num.cuda())
+            depth_aware_feature_map = depth.unsqueeze(
+                1) * depth_feature[:, self.depth_channels:(
+                    self.depth_channels + self.output_channels)].unsqueeze(2)
         if is_return_depth:
             # final_depth has to be fp32, otherwise the depth
             # loss will colapse during the traing process.
-            return feature_map.contiguous(
-            ), depth_feature[:, :self.depth_channels].softmax(dim=1)
-        return feature_map.contiguous()
+            return depth_aware_feature_map.contiguous(), \
+                    depth_feature[:, :self.depth_channels].softmax(dim=1)
+        return depth_aware_feature_map.contiguous()
 
     def forward(self,
                 sweep_imgs,

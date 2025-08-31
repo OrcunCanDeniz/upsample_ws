@@ -11,6 +11,7 @@ class VoxelPooling3DTrain(Function):
     def forward(ctx,
                 geom_xyz: torch.Tensor,        # [B, N, 3] voxel indices (x,y,z) per sample
                 input_features: torch.Tensor,  # [B, N, C]
+                depth_logits: torch.Tensor,   # [B, N]
                 voxel_num: torch.Tensor        # [3] -> [X, Y, Z]
                 ) -> torch.Tensor:
         """3D voxel pooling forward (keeps Z; no height compression).
@@ -26,6 +27,7 @@ class VoxelPooling3DTrain(Function):
         """
         assert geom_xyz.is_contiguous()
         assert input_features.is_contiguous()
+        assert depth_logits.is_contiguous()
 
         # we never backprop through geom indices
         ctx.mark_non_differentiable(geom_xyz)
@@ -47,6 +49,7 @@ class VoxelPooling3DTrain(Function):
 
         # kernel expects (B, Z, Y, X, C) contiguous, channel last
         output_features = input_features.new_zeros(B, Z, Y, X, C)
+        uni_depth_logits_output = input_features.new_zeros(B, Z, Y, X)
 
         # Save the (b,z,y,x) voxel for each input point; -1 marks invalid
         pos_memo = geom_xyz.new_full((B, N, 4), -1)
@@ -57,15 +60,19 @@ class VoxelPooling3DTrain(Function):
             B, N, C, X, Y, Z,
             geom_xyz,          # [B, N, 3] (x,y,z)
             input_features,     # [B, N, C]
+            depth_logits,       # [B, N]
             output_features,    # [B, Z, Y, X, C]
+            uni_depth_logits_output, # [B, Z, Y, X]
             pos_memo,           # [B, N, 4] (b,z,y,x) or -1
         )
 
         # stash tensors for backward
         ctx.save_for_backward(grad_input_features, pos_memo)
+        #TODO: save depth_logits for backward ( DONT KNOW IF IT IS NEEDED )
+        # ctx.save_for_backward(depth_logits)
 
         # return channel-first 3D volume
-        return output_features.permute(0, 4, 1, 2, 3).contiguous()  # (B, C, Z, Y, X)
+        return output_features.permute(0, 4, 1, 2, 3).contiguous(), uni_depth_logits_output.contiguous()  # (B, C, Z, Y, X)
 
     @staticmethod
     def backward(ctx, grad_output_features):
