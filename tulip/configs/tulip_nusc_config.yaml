@@ -1,0 +1,102 @@
+# Example KITTI Configuration for TULIP LiDAR Upsampling
+# This file shows how to configure TULIP for KITTI dataset
+
+# Model selection and architecture
+model_select: 'tulip_base'  # Use base TULIP model for KITTI
+window_size: [2, 8]
+patch_size: [1, 4]
+pixel_shuffle: true  # improve
+circular_padding: true  # improve
+patch_unmerging: true  # improve
+swin_v2: false
+
+# Backbone configuration for KITTI
+backbone:
+  x_bound: [-51.2, 51.2, 0.8]
+  y_bound: [-51.2, 51.2, 0.8]
+  z_bound: [-5, 3, 8]
+  d_bound: [2.0, 58.0, 0.5]
+  final_dim: [256, 704]
+  output_channels: 80
+  downsample_factor: 16
+  
+  # Image backbone configuration
+  img_backbone_conf:
+    type: 'ResNet'
+    depth: 50
+    frozen_stages: 0
+    out_indices: [0, 1, 2, 3]
+    norm_eval: false
+    init_cfg:
+      type: 'Pretrained'
+      checkpoint: 'torchvision://resnet50'
+  
+  # Image neck configuration
+  img_neck_conf:
+    type: 'SECONDFPN'
+    in_channels: [256, 512, 1024, 2048]
+    upsample_strides: [0.25, 0.5, 1, 2]
+    out_channels: [128, 128, 128, 128]
+  
+  # Depth network configuration
+  depth_net_conf:
+    in_channels: 512
+    mid_channels: 512
+
+# Dataset configuration for KITTI
+dataset_select: 'nuscenes'
+img_size_low_res: [8, 1024]  # KITTI dimensions from bash script
+img_size_high_res: [32, 1024]
+in_chans: 1
+data_path_low_res: './data/nuscenes/'
+data_path_high_res: './data/nuscenes/'
+
+# Data processing options
+save_pcd: false  # Save PCD output for KITTI evaluation
+log_transform: true  # improve
+keep_close_scan: false
+keep_far_scan: false
+
+# Training configuration
+batch_size: 8  # From bash script
+epochs: 600
+accum_iter: 1
+weight_decay: 0.01  # From bash script
+lr: 0.0005  # From bash script
+blr: 0.001
+min_lr: 0.0
+warmup_epochs: 60  # From bash script
+
+# Augmentation
+roll: false
+
+# Checkpoint and logging
+output_dir: './experiment/nuscenes/tulip_base'
+log_dir: './output_dir'
+save_frequency: 100
+num_workers: 2
+pin_mem: true
+
+# Evaluation configuration
+mc_drop: true  # Enable Monte Carlo dropout
+num_mcdropout_iterations: 50
+noise_threshold: 0.03
+grid_size: 0.1
+
+# Logging and monitoring
+wandb_disabled: false
+entity: 'pnp_dnp'
+project_name: 'upsample'
+run_name: 'tulip_base_nuscenes'
+
+# Device configuration
+device: 'cuda'
+seed: 42
+resume: ''
+start_epoch: 0
+distributed: true
+world_size: 1
+dist_on_itp: false
+local_rank: -1
+dist_url: 'env://'
+gpu: 0
