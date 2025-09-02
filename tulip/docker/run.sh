@@ -44,9 +44,9 @@ populate_volumes() {
 }
 
 TAG="latest"
-BUILD_NAME="upsample"
+BUILD_NAME="orcund/upsample"
 IMAGE_NAME="${BUILD_NAME,,}:${TAG,,}"
-CONTAINER_NAME="${BUILD_NAME,,}"
+CONTAINER_NAME="upsample"
 
 
 # Initialize volumes string

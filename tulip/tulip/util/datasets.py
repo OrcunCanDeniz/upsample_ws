@@ -545,9 +545,38 @@ class RangeMapFolder(DatasetFolder):
                 'class':target,
                 'name': name}
 
-
 @register_dataset('nuscenes')
-def build_nuscenes_upsampling_dataset(is_train, log_transform = False):
+def build_nuscenes_upsampling_dataset(is_train, args):
+    input_size = (8,1024)
+    output_size = (32,1024)
+    
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/80)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/80)]
+
+    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0],))
+    if output_size[1] // input_size[1] > 1:
+        t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
+
+    if args.log_transform:
+        t_low_res.append(LogTransform())
+        t_high_res.append(LogTransform())
+
+    transform_low_res = transforms.Compose(t_low_res)
+    transform_high_res = transforms.Compose(t_high_res)        
+    
+    root_low_res = os.path.join(args.data_path_low_res, 'train_rv' if is_train else 'val_rv')
+    root_high_res = os.path.join(args.data_path_high_res, 'train_rv' if is_train else 'val_rv')
+
+    dataset_low_res = RangeMapFolder(root_low_res, transform = transform_low_res, loader= npy_loader, class_dir=False)
+    dataset_high_res = RangeMapFolder(root_high_res, transform = transform_high_res, loader =  npy_loader, class_dir = False)
+
+    assert len(dataset_high_res) == len(dataset_low_res)
+
+    dataset_concat = PairDataset(dataset_low_res, dataset_high_res)
+    return dataset_concat
+
+@register_dataset('nuscenes_with_image')
+def build_nuscenes_w_image_upsampling_dataset(is_train, log_transform = False):
     input_size = (8,1024)
     output_size = (32,1024)
     

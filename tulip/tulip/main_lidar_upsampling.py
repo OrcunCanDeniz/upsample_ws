@@ -34,10 +34,12 @@ from model.CMTulip import CMTULIP
 import wandb
 
 
-def load_config(config_path):
+def load_config(args):
     """Load configuration from YAML file using MMCV Config"""
+    config_path = args.config
     if config_path and os.path.exists(config_path):
         config = Config.fromfile(config_path)
+        config.eval = args.eval
         return config
     else:
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -67,7 +69,7 @@ def main(args):
     args = get_args_parser()
     args = args.parse_args()
 
-    config = load_config(args.config)
+    config = load_config(args)
     
     if config.model_select == "CMTULIP":
         from engine_upsampling_w_image import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop
@@ -155,7 +157,7 @@ def main(args):
         num_workers=config.num_workers,
         pin_memory=config.pin_mem,
         drop_last=False,
-        collate_fn=collate_fn
+        collate_fn=collate_func
     )
     
     
@@ -189,7 +191,6 @@ def main(args):
             patch_unmerging=config.patch_unmerging
         )
     
-
     if args.eval and os.path.exists(config.output_dir):
         print("Loading Checkpoint and directly start the evaluation")
         if config.output_dir.endswith("pth"):
@@ -197,7 +198,6 @@ def main(args):
             config.output_dir = os.path.dirname(config.output_dir)
         else:
             get_latest_checkpoint(config)
-
         misc.load_model(
                 args=config, model_without_ddp=model, optimizer=None,
                 loss_scaler=None)

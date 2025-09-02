@@ -4,3 +4,5 @@ tulip/output_dir
 **/__pycache__/** 
 **/wandb/**
 **/.vscode/**
+*.pth
+**/log.txt

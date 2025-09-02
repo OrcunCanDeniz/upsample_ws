@@ -48,8 +48,8 @@ dataset_select: 'kitti'
 img_size_low_res: [16, 1024]  # KITTI dimensions from bash script
 img_size_high_res: [64, 1024]
 in_chans: 1
-data_path_low_res: './data/KITTI/'
-data_path_high_res: './data/KITTI/'
+data_path_low_res: './data/kitti/'
+data_path_high_res: './data/kitti/'
 
 # Data processing options
 save_pcd: false  # Save PCD output for KITTI evaluation

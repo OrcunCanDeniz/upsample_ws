@@ -4,7 +4,7 @@
 # The script now uses a YAML config file - all parameters are in the config
 
 args=(
-    --config ./configs/tulip_kitti_config.yaml
+    --config ./configs/tulip_nusc_config.yaml
     )
 
 # real batch size in training = batch_size * nproc_per_node
