@@ -540,7 +540,6 @@ class BaseLSSFPN(nn.Module):
             )
 
             img_feat_with_depth = img_feat_with_depth.permute(0, 1, 3, 4, 5, 2)
-            import pdb; pdb.set_trace()
             feature_map = voxel_pooling_train(geom_xyz,
                                               img_feat_with_depth.contiguous(),
                                               self.voxel_num.cuda())

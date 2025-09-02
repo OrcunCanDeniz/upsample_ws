@@ -167,6 +167,7 @@ def main(args):
         model = CMTULIP(
             backbone_config=config.backbone,
             img_size=tuple(config.img_size_low_res),
+            depths=config.depths,
             target_img_size=tuple(config.img_size_high_res),
             patch_size=tuple(config.patch_size), 
             in_chans=config.in_chans,
@@ -175,7 +176,8 @@ def main(args):
             pixel_shuffle=config.pixel_shuffle,
             circular_padding=config.circular_padding,
             log_transform=config.log_transform,
-            patch_unmerging=config.patch_unmerging
+            patch_unmerging=config.patch_unmerging,
+            lss_weights_path=config.lss_weights_path
         )
     else:
         model = tulip.__dict__[config.model_select](

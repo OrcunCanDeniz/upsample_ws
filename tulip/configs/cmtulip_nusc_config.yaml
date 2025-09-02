@@ -4,11 +4,13 @@
 # Model selection and architecture
 model_select: 'CMTULIP'  # Use base TULIP model for KITTI
 window_size: [2, 8]
+depths: [2,6,2]
 patch_size: [1, 4]
 pixel_shuffle: true  # improve
 circular_padding: true  # improve
 patch_unmerging: true  # improve
 swin_v2: false
+lss_weights_path: './r50_lss_fpn.pth' 
 
 # Backbone configuration for KITTI
 backbone:
@@ -44,7 +46,7 @@ backbone:
     mid_channels: 512
 
 # Dataset configuration for KITTI
-dataset_select: 'nuscenes'
+dataset_select: 'nuscenes_with_image'
 img_size_low_res: [16, 1024]  # KITTI dimensions from bash script
 img_size_high_res: [64, 1024]
 in_chans: 1
