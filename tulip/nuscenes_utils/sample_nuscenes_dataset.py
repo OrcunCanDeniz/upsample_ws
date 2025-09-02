@@ -35,7 +35,7 @@ class NuScenesPointCloudToRangeImage:
 
     def __init__(self,
                  min_depth=2.0,
-                 max_depth=100.0,
+                 max_depth=50.0,
                  flip_vertical=True,
                  log_scale=False,
                  inverse_scale=False,

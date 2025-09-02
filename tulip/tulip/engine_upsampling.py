@@ -508,6 +508,15 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
 
                 pcd_pred = img_to_pcd_durlar(pred_img)
                 pcd_gt = img_to_pcd_durlar(images_high_res)
+                
+            elif args.dataset_select == "nuscenes":
+                low_res_index = range(0, h_high_res, downsampling_factor)
+                pred_low_res_part = pred_img[low_res_index, :]
+                loss_low_res_part = np.abs(pred_low_res_part - images_low_res)
+                loss_low_res_part = loss_low_res_part.mean()
+                pred_img[low_res_index, :] = images_low_res
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 50)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 50)
             
             else:
                 raise NotImplementedError(f"Cannot find the dataset: {args.dataset_select}")

@@ -13,12 +13,8 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
     os.makedirs(split_rv_dir, exist_ok=True)
     print(f"Created directory: {split_rv_dir}")
     
-    converter = NuScenesPointCloudToRangeImage(
-                                                width=1024,
-                                                height=32,
-                                                min_depth=2.0,
-                                                max_depth=100.0
-                                            )
+    converter = NuScenesPointCloudToRangeImage( min_depth=2.0,
+                                                max_depth=50.0 )
     lidar_name = 'LIDAR_TOP'
     infos = list()
     for cur_scene in tqdm(nusc.scene):
