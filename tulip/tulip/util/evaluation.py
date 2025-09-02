@@ -110,7 +110,6 @@ def img_to_pcd_nuscenes(img_range, maximum_range = 100.0):
     x = rr * ce * ca
     y = rr * ce * sa
     z = rr * se + h_per_row[rings]
-    pdb.set_trace()
 
     pts = np.stack([x, y, z], axis=-1).astype(np.float32, copy=False)
     return pts
