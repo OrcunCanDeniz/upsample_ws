@@ -3,6 +3,7 @@ import math
 import torch
 from chamfer_distance import ChamferDistance as chamfer_dist
 # from pyemd import emd
+import pdb
 
 offset_lut = np.array([48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0,48,32,16,0])
 
@@ -37,8 +38,82 @@ def px_to_xyz(px, p_range, cols): # px: (u, v) size = (H*W,2)
     z_sensor = z_lidar + lidar_to_sensor_z_offset
     return np.stack((x_sensor, y_sensor, z_sensor), axis=-1)
 
-def img_to_pcd_nuscenes(img_range, maximum_range = 80):
-    raise NotImplementedError("Not implemented")
+
+def img_to_pcd_nuscenes(img_range, maximum_range = 100.0):
+    # Parse inputs
+    if img_range.ndim == 3:
+        C = img_range.shape[-1]
+        range_img = img_range[..., 0].astype(np.float32, copy=False)
+        mask_img  = img_range[..., -1] if C >= 2 else None
+    else:
+        range_img = img_range.astype(np.float32, copy=False)
+        mask_img  = None
+
+    H, W = range_img.shape
+    r = range_img  # already in meters
+
+    # Valid pixels
+    if mask_img is not None:
+        valid = (mask_img > 0.5) & np.isfinite(r) & (r > 0)
+    else:
+        valid = np.isfinite(r) & (r > 0)
+
+    if not np.any(valid):
+        return np.zeros((0, 3), dtype=np.float32)
+
+    rows, cols = np.nonzero(valid)
+    rr = r[rows, cols]
+
+    # Forward used flip_vertical True so rows equal H minus one minus ring
+    rings = (H - 1 - rows).astype(np.int32)
+    rings = np.clip(rings, 0, H - 1)
+
+    # HDL 32E per ring elevations in degrees, interleaved order
+    hdl32e_vert_deg = np.array([
+        -30.67, -9.33,  -29.33,  -8.00,
+        -28.00, -6.66,  -26.66,  -5.33,
+        -25.33, -4.00,  -24.00,  -2.67,
+        -22.67, -1.33,  -21.33,   0.00,
+        -20.00,  1.33,  -18.67,   2.67,
+        -17.33,  4.00,  -16.00,   5.33,
+        -14.67,  6.67,  -13.33,   8.00,
+        -12.00,  9.33,  -10.67,  10.67
+    ], dtype=np.float32)
+    
+    h_per_row = np.array([-0.00216031, -0.00098729, -0.00020528,  0.00174976, 
+                            0.0044868 , -0.00294233, -0.00059629, -0.00020528,  
+                            0.00174976, -0.00294233, -0.0013783 ,  0.00018573,
+                            0.00253177, -0.00098729,  0.00018573,  0.00096774, 
+                            -0.00411535, -0.0013783, 0.00018573,  0.00018573, 
+                            -0.00294233, -0.0013783 , -0.00098729, -0.00020528,
+                            0.00018573,  0.00018573,  0.00018573, -0.00020528,  
+                            0.00018573,  0.00018573, 0.00018573,  0.00018573,], dtype=np.float32)
+
+    # Match table length to image height
+    if H == len(hdl32e_vert_deg):
+        elev_deg_table = hdl32e_vert_deg
+    else:
+        t_src = np.linspace(0.0, 1.0, len(hdl32e_vert_deg), dtype=np.float32)
+        t_dst = np.linspace(0.0, 1.0, H, dtype=np.float32)
+        elev_deg_table = np.interp(t_dst, t_src, hdl32e_vert_deg).astype(np.float32)
+
+    elev = np.deg2rad(elev_deg_table[rings]).astype(np.float32)
+
+    # Azimuth at bin center to match forward rounding
+    az = ((cols.astype(np.float32) + 0.5) / float(W)) * (2.0 * np.pi) - np.pi
+
+    ce = np.cos(elev, dtype=np.float32)
+    se = np.sin(elev, dtype=np.float32)
+    ca = np.cos(az, dtype=np.float32)
+    sa = np.sin(az, dtype=np.float32)
+
+    x = rr * ce * ca
+    y = rr * ce * sa
+    z = rr * se + h_per_row[rings]
+    pdb.set_trace()
+
+    pts = np.stack([x, y, z], axis=-1).astype(np.float32, copy=False)
+    return pts
 
 
 def img_to_pcd_durlar(img_range, maximum_range = 120):  # 1 x H x W cuda torch
