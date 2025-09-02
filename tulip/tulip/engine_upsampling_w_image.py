@@ -194,8 +194,8 @@ def evaluate(data_loader, model, device, log_writer, args=None):
                 pred_img = torch.where((pred_img >= 0.3/120) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
-            elif args.dataset_select == "nuscenes":
-                pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
+            elif args.dataset_select == "nuscenes_with_image":
+                pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             
@@ -243,7 +243,7 @@ def evaluate(data_loader, model, device, log_writer, args=None):
                 pcd_pred = img_to_pcd_kitti(pred_img, maximum_range= 80)
                 pcd_gt = img_to_pcd_kitti(images_high_res, maximum_range = 80)
                 
-            elif args.dataset_select == "nuscenes":
+            elif args.dataset_select == "nuscenes_with_image":
                 low_res_index = range(0, h_high_res, downsampling_factor)
 
                 pred_low_res_part = pred_img[low_res_index, :]
@@ -253,8 +253,8 @@ def evaluate(data_loader, model, device, log_writer, args=None):
                 pred_img[low_res_index, :] = images_low_res
                 
                 # 3D Evaluation Metrics
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 50)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 50)
 
 
             elif args.dataset_select == "durlar":
@@ -469,6 +469,8 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pred_img = torch.where((pred_img >= 0.3/120) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
+            elif args.dataset_select == "nuscenes_with_image":
+                pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             
@@ -505,7 +507,7 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pcd_pred = img_to_pcd_carla(pred_img, maximum_range = 80)
                 pcd_gt = img_to_pcd_carla(images_high_res, maximum_range = 80)
 
-            elif args.dataset_select == "nuscenes":
+            elif args.dataset_select == "nuscenes_with_image":
                 # TODO not checked and img_to_pcd_nuscenes not implemented yet
                 low_res_index = range(0, h_high_res, downsampling_factor)
                 
@@ -516,8 +518,8 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pred_img[low_res_index, :] = images_low_res
                 
                 # 3D Evaluation Metrics
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 50)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 50)
                 
 
             elif args.dataset_select == "kitti":
