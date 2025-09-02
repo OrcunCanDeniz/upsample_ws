@@ -6,3 +6,4 @@ tulip/output_dir
 **/.vscode/**
 *.pth
 **/log.txt
+**/data/**
