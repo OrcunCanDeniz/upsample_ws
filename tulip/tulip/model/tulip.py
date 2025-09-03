@@ -734,6 +734,16 @@ class TULIP(nn.Module):
             total_loss, pixel_loss = self.forward_loss(x, target)
             return x, total_loss, pixel_loss
 
+
+def tulip_small(**kwargs):
+    model = TULIP(
+        depths=(2, 2, 2), embed_dim=96, num_heads=(3, 6, 12),
+        qkv_bias=True, mlp_ratio=4,
+        drop_path_rate=0.1, drop_rate=0, attn_drop_rate=0,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        #  **kwargs)
+    return model
+
 def tulip_base(**kwargs):
     model = TULIP(
         depths=(2, 2, 2, 2), embed_dim=96, num_heads=(3, 6, 12, 24),

@@ -9,7 +9,6 @@ pixel_shuffle: true  # improve
 circular_padding: true  # improve
 patch_unmerging: true  # improve
 swin_v2: false
-depths: [2, 2, 6, 2]
 
 # Backbone configuration for KITTI
 backbone:

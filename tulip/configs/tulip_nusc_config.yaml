@@ -2,7 +2,7 @@
 # This file shows how to configure TULIP for KITTI dataset
 
 # Model selection and architecture
-model_select: 'tulip_base'  # Use base TULIP model for KITTI
+model_select: 'tulip_small'  # Use base TULIP model for KITTI
 window_size: [2, 8]
 patch_size: [1, 4]
 pixel_shuffle: true  # improve
