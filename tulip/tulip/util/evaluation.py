@@ -39,29 +39,21 @@ def px_to_xyz(px, p_range, cols): # px: (u, v) size = (H*W,2)
     return np.stack((x_sensor, y_sensor, z_sensor), axis=-1)
 
 
-def img_to_pcd_nuscenes(img_range, maximum_range = 100.0):
-    # Parse inputs
-    if img_range.ndim == 3:
-        C = img_range.shape[-1]
-        range_img = img_range[..., 0].astype(np.float32, copy=False)
-        mask_img  = img_range[..., -1] if C >= 2 else None
-    else:
-        range_img = img_range.astype(np.float32, copy=False)
-        mask_img  = None
+def img_to_pcd_nuscenes(img_range, maximum_range = 50.0, eval=True):
+    maximum_range = maximum_range if eval else 1.0
+        
+    range_img = img_range.astype(np.float32, copy=False)
 
     H, W = range_img.shape
     r = range_img  # already in meters
 
-    # Valid pixels
-    if mask_img is not None:
-        valid = (mask_img > 0.5) & np.isfinite(r) & (r > 0)
-    else:
-        valid = np.isfinite(r) & (r > 0)
+    valid = np.isfinite(r) & (r > 0)
 
     if not np.any(valid):
         return np.zeros((0, 3), dtype=np.float32)
 
     rows, cols = np.nonzero(valid)
+    r *= maximum_range # denormalize to meters
     rr = r[rows, cols]
 
     # Forward used flip_vertical True so rows equal H minus one minus ring
