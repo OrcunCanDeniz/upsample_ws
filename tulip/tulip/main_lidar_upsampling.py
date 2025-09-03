@@ -182,6 +182,7 @@ def main(args):
     else:
         model = tulip.__dict__[config.model_select](
             img_size=tuple(config.img_size_low_res),
+            depths=config.depths,
             target_img_size=tuple(config.img_size_high_res),
             patch_size=tuple(config.patch_size), 
             in_chans=config.in_chans,
