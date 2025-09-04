@@ -55,7 +55,7 @@ RUN git clone -b v1.0.0rc4 https://github.com/open-mmlab/mmdetection3d.git && \
     cd mmdetection3d && pip install -v -e . 
 
 RUN python -m pip install "pip<24.1"
-RUN pip install numpy==1.23.5 llvmlite==0.39.1 numba==0.56.4 pytorch-lightning==1.6.5
+RUN pip install numpy==1.23.5 llvmlite==0.39.1 numba==0.56.4 pytorch-lightning==1.6.5 "pillow<10.0.0" open3d
 
 # Copy entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

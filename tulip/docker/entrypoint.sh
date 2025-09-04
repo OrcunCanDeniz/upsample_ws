@@ -18,7 +18,7 @@ if [ -d "/workspace/BEVDepth" ]; then
 else
     echo "Warning: BEVDepth directory not found at /workspace/BEVDepth"
 fi
-
+cd /workspace/
 # Execute the command passed to docker run
 echo "Executing: $@"
 exec "$@"
