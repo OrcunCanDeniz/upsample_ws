@@ -42,7 +42,7 @@ def px_to_xyz(px, p_range, cols): # px: (u, v) size = (H*W,2)
 def img_to_pcd_nuscenes(img_range, maximum_range = 50.0, eval=True):
     maximum_range = maximum_range if eval else 1.0
         
-    range_img = img_range.astype(np.float32, copy=False)
+    range_img = img_range.astype(np.float32, copy=True)
 
     H, W = range_img.shape
     r = range_img  # already in meters
