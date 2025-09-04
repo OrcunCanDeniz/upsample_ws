@@ -253,8 +253,8 @@ def evaluate(data_loader, model, device, log_writer, args=None):
                 pred_img[low_res_index, :] = images_low_res
                 
                 # 3D Evaluation Metrics
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 50)
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 50)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
 
 
             elif args.dataset_select == "durlar":
@@ -508,7 +508,6 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pcd_gt = img_to_pcd_carla(images_high_res, maximum_range = 80)
 
             elif args.dataset_select == "nuscenes_with_image":
-                # TODO not checked and img_to_pcd_nuscenes not implemented yet
                 low_res_index = range(0, h_high_res, downsampling_factor)
                 
                 pred_low_res_part = pred_img[low_res_index, :]
@@ -518,8 +517,8 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pred_img[low_res_index, :] = images_low_res
                 
                 # 3D Evaluation Metrics
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 50)
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 50)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
                 
 
             elif args.dataset_select == "kitti":

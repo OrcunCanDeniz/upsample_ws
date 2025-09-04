@@ -23,6 +23,7 @@ import matplotlib.cm as cmx
 from util.evaluation import *
 from util.filter import *
 import trimesh
+import pdb
 
 import time
 import tqdm
@@ -519,8 +520,8 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 loss_low_res_part = np.abs(pred_low_res_part - images_low_res)
                 loss_low_res_part = loss_low_res_part.mean()
                 pred_img[low_res_index, :] = images_low_res
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 50)
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 50)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
             
             else:
                 raise NotImplementedError(f"Cannot find the dataset: {args.dataset_select}")

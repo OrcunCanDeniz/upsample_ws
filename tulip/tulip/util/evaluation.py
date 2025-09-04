@@ -2,6 +2,7 @@ import numpy as np
 import math
 import torch
 from chamfer_distance import ChamferDistance as chamfer_dist
+from nuscenes_utils.sample_nuscenes_dataset import ELEV_DEG_PER_RING_NUCSENES_RAD
 # from pyemd import emd
 import pdb
 
@@ -39,74 +40,42 @@ def px_to_xyz(px, p_range, cols): # px: (u, v) size = (H*W,2)
     return np.stack((x_sensor, y_sensor, z_sensor), axis=-1)
 
 
-def img_to_pcd_nuscenes(img_range, maximum_range = 50.0, eval=True):
-    maximum_range = maximum_range if eval else 1.0
-        
-    range_img = img_range.astype(np.float32, copy=True)
-
+def img_to_pcd_nuscenes(range_img,
+                        maximum_range: float = 100.0,
+                        flip_vertical: bool = True,
+                        eval: bool = True) -> np.ndarray:
+    """
+    Simplest consistent inverse for HDL-32E NuScenes range images.
+    range_img: (H, W) 32x1024
+    flip_vertical: wheter the range image top is highest elevation
+    eval: is this being called for evaluation? if so denormalize the range image from 0-1 to 0-maximum_range
+    """
+    if range_img.ndim == 3 and range_img.shape[2] == 1:
+        range_img = range_img[..., 0]
     H, W = range_img.shape
-    r = range_img  # already in meters
 
-    valid = np.isfinite(r) & (r > 0)
+    # Valid pixels
+    R = range_img.astype(np.float32, copy=True)
+    if eval:
+        R *= maximum_range # eval 
+    rr = np.repeat(np.arange(H), W) # [000000,111111,222222,333333,444444,555555,666666,777777]
+    cc = np.tile(np.arange(W), H) # [01234567,01234567,01234567,01234567,01234567,01234567,01234567,01234567]
 
-    if not np.any(valid):
-        return np.zeros((0, 3), dtype=np.float32)
+    # Undo vertical flip from forward pass if needed
+    row_idx = (H - 1 - rr) if flip_vertical else rr
 
-    rows, cols = np.nonzero(valid)
-    r *= maximum_range # denormalize to meters
-    rr = r[rows, cols]
+    # Elevation directly from row index
+    el = ELEV_DEG_PER_RING_NUCSENES_RAD[row_idx]
+    az = ((cc.astype(np.float32) + 0.5) / W) * (2*np.pi) - np.pi
+    r = R[rr, cc]
 
-    # Forward used flip_vertical True so rows equal H minus one minus ring
-    rings = (H - 1 - rows).astype(np.int32)
-    rings = np.clip(rings, 0, H - 1)
+    x = r * np.cos(el) * np.cos(az)
+    y = r * np.cos(el) * np.sin(az)
+    z = r * np.sin(el)
 
-    # HDL 32E per ring elevations in degrees, interleaved order
-    hdl32e_vert_deg = np.array([
-        -30.67, -9.33,  -29.33,  -8.00,
-        -28.00, -6.66,  -26.66,  -5.33,
-        -25.33, -4.00,  -24.00,  -2.67,
-        -22.67, -1.33,  -21.33,   0.00,
-        -20.00,  1.33,  -18.67,   2.67,
-        -17.33,  4.00,  -16.00,   5.33,
-        -14.67,  6.67,  -13.33,   8.00,
-        -12.00,  9.33,  -10.67,  10.67
-    ], dtype=np.float32)
+    pc = np.stack([x, y, z], axis=1)
+    return pc.astype(np.float32)
     
-    h_per_row = np.array([-0.00216031, -0.00098729, -0.00020528,  0.00174976, 
-                            0.0044868 , -0.00294233, -0.00059629, -0.00020528,  
-                            0.00174976, -0.00294233, -0.0013783 ,  0.00018573,
-                            0.00253177, -0.00098729,  0.00018573,  0.00096774, 
-                            -0.00411535, -0.0013783, 0.00018573,  0.00018573, 
-                            -0.00294233, -0.0013783 , -0.00098729, -0.00020528,
-                            0.00018573,  0.00018573,  0.00018573, -0.00020528,  
-                            0.00018573,  0.00018573, 0.00018573,  0.00018573,], dtype=np.float32)
-
-    # Match table length to image height
-    if H == len(hdl32e_vert_deg):
-        elev_deg_table = hdl32e_vert_deg
-    else:
-        t_src = np.linspace(0.0, 1.0, len(hdl32e_vert_deg), dtype=np.float32)
-        t_dst = np.linspace(0.0, 1.0, H, dtype=np.float32)
-        elev_deg_table = np.interp(t_dst, t_src, hdl32e_vert_deg).astype(np.float32)
-
-    elev = np.deg2rad(elev_deg_table[rings]).astype(np.float32)
-
-    # Azimuth at bin center to match forward rounding
-    az = ((cols.astype(np.float32) + 0.5) / float(W)) * (2.0 * np.pi) - np.pi
-
-    ce = np.cos(elev, dtype=np.float32)
-    se = np.sin(elev, dtype=np.float32)
-    ca = np.cos(az, dtype=np.float32)
-    sa = np.sin(az, dtype=np.float32)
-
-    x = rr * ce * ca
-    y = rr * ce * sa
-    z = rr * se + h_per_row[rings]
-
-    pts = np.stack([x, y, z], axis=-1).astype(np.float32, copy=False)
-    return pts
-
-
 def img_to_pcd_durlar(img_range, maximum_range = 120):  # 1 x H x W cuda torch
     rows, cols = img_range.shape[:2]
     uu, vv = np.meshgrid(np.arange(cols), np.arange(rows), indexing="ij")

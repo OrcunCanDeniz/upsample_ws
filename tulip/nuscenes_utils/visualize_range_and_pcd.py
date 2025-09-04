@@ -19,34 +19,15 @@ if PROJECT_DIR not in sys.path:
 from tulip.util.evaluation import img_to_pcd_nuscenes  # noqa: E402
 from nuscenes_utils.sample_nuscenes_dataset import NuScenesPointCloudToRangeImage  # noqa: E402
 
-
-def _set_axes_equal_3d(ax):
-    """Set 3D plot axes to equal scale."""
-    x_limits = ax.get_xlim3d()
-    y_limits = ax.get_ylim3d()
-    z_limits = ax.get_zlim3d()
-
-    x_range = abs(x_limits[1] - x_limits[0])
-    y_range = abs(y_limits[1] - y_limits[0])
-    z_range = abs(z_limits[1] - z_limits[0])
-    plot_radius = 0.5 * max([x_range, y_range, z_range])
-
-    x_mid = np.mean(x_limits)
-    y_mid = np.mean(y_limits)
-    z_mid = np.mean(z_limits)
-
-    ax.set_xlim3d([x_mid - plot_radius, x_mid + plot_radius])
-    ax.set_ylim3d([y_mid - plot_radius, y_mid + plot_radius])
-    ax.set_zlim3d([z_mid - plot_radius, z_mid + plot_radius])
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Visualize nuScenes range image and reconstructed point cloud")
     parser.add_argument("npy_path", type=str, help="Path to .npy file saved by sample_nuscenes_dataset.py")
-    parser.add_argument("--maximum_range", type=float, default=100.0, help="Max range used when range is normalized [0,1]")
+    parser.add_argument("--maximum_range", type=float, default=80.0, help="Max range used when range is normalized [0,1]")
     parser.add_argument("--sample", type=int, default=150000, help="Max number of points to plot (subsample if larger)")
     parser.add_argument("--cmap", type=str, default="viridis", help="Colormap for range image")
     parser.add_argument("--no_range_plot", action="store_true", help="Skip matplotlib range image plot")
+    parser.add_argument("--save_range", type=str, default=None, help="Save range image to this path (no legend/axes)")
+    parser.add_argument("--save_dpi", type=int, default=150, help="DPI when saving range image")
     return parser.parse_args()
 
 
@@ -75,7 +56,8 @@ def main():
         raise RuntimeError(f"Failed to load original point cloud: {e}")
 
     # Render ground-truth point cloud to a range view using the same converter
-    converter = NuScenesPointCloudToRangeImage()
+    flip_vertical = True
+    converter = NuScenesPointCloudToRangeImage(flip_vertical=flip_vertical)
     rv = converter(raw)
     range_img = rv[..., 0].astype(np.float32)
 
@@ -89,7 +71,8 @@ def main():
         plt.colorbar(im, fraction=0.046, pad=0.04)
 
     # Reconstruct point cloud from the rendered range view
-    points = img_to_pcd_nuscenes(rv, maximum_range=args.maximum_range)
+    points = img_to_pcd_nuscenes(rv[...,0], maximum_range=args.maximum_range, flip_vertical=flip_vertical, eval=False)
+
     if points.shape[0] == 0:
         print("No valid points reconstructed from the image.")
         plt.show()
