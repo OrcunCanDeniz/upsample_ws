@@ -9,7 +9,7 @@ from util.filter import *
 
 from .tulip import TULIP
 from bevdepth.layers.backbones.base_lss_fpn import BaseLSSFPN
-from global_attention import TokenLearnerBEV, GlobalBEVAttention
+from .global_attention import TokenLearnerBEV, GlobalBEVAttention
 import os
 
 import pdb
@@ -20,8 +20,8 @@ class CMTULIP(TULIP):
         super(CMTULIP, self).__init__(**kwargs)
 
         # TODO: Integrate the multiview backbone and token learner
-        self.token_learner = TokenLearnerBEV(C=80, K=16, hidden=128, temperature=1.0)
-        self.global_attention = GlobalBEVAttention(c_bev=80, c_mid=384, d=128, heads=4, ln_eps=1e-6)
+        self.token_learner = TokenLearnerBEV(C=80, K=16, hidden=64, temperature=1.0)
+        self.global_attention = GlobalBEVAttention(c_bev=80, c_mid=768, d=64, heads=4, ln_eps=1e-6)
 
         self.init = False
         self.apply(self.init_weights)
@@ -105,13 +105,7 @@ class CMTULIP(TULIP):
 
 
     def forward(self, x, in_imgs, mats_dict, timestamps, target, mc_drop = False):
-        if self.init:
-            self.multiview_backbone.eval()
-            self.init = True
-        
-        # get depth features
-        with torch.no_grad():
-            bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
+        bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
             
         bev_tokens = self.token_learner(bev_feat)
         x = self.patch_embed(x) 
@@ -122,6 +116,7 @@ class CMTULIP(TULIP):
             x = layer(x)
             
         x = self.global_attention(x, bev_tokens)
+        
             
         x = self.first_patch_expanding(x)
         for i, layer in enumerate(self.layers_up):

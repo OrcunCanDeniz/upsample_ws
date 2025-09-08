@@ -41,6 +41,9 @@ def enable_dropout(model):
     for m in model.modules():
         if m.__class__.__name__.startswith('Dropout'):
             m.train()
+            
+def evaluate(data_loader, model, device, log_writer, args=None):
+    raise NotImplementedError("Please use MCdrop function for evaluation with MC Dropout")
 
 
 def train_one_epoch(model: torch.nn.Module,

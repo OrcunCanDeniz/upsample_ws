@@ -47,8 +47,8 @@ backbone:
 
 # Dataset configuration for KITTI
 dataset_select: 'nuscenes_with_image'
-img_size_low_res: [16, 1024]  # KITTI dimensions from bash script
-img_size_high_res: [64, 1024]
+img_size_low_res: [8, 1024]  # KITTI dimensions from bash script
+img_size_high_res: [32, 1024]
 in_chans: 1
 data_path_low_res: './data/nuscenes/'
 
@@ -59,7 +59,7 @@ keep_close_scan: false
 keep_far_scan: false
 
 # Training configuration
-batch_size: 1  # From bash script
+batch_size: 12  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
@@ -75,7 +75,7 @@ roll: false
 output_dir: './experiment/kitti/tulip_base'
 log_dir: './output_dir'
 save_frequency: 100
-num_workers: 2
+num_workers: 8
 pin_mem: true
 
 # Evaluation configuration
@@ -88,7 +88,7 @@ grid_size: 0.1
 wandb_disabled: true
 entity: 'pnp_dnp'
 project_name: 'upsample'
-run_name: 'tulip_base_kitti'
+run_name: 'cmtulip_base_nusc'
 
 # Device configuration
 device: 'cuda'
