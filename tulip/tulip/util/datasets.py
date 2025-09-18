@@ -550,8 +550,8 @@ def build_nuscenes_upsampling_dataset(is_train, args):
     input_size = (8,1024)
     output_size = (32,1024)
     
-    t_low_res = [transforms.ToTensor(), ScaleTensor(1/80)]
-    t_high_res = [transforms.ToTensor(), ScaleTensor(1/80)]
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/80), FilterInvalidPixels(min_range = 0, max_range = 55/80)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/80), FilterInvalidPixels(min_range = 0, max_range = 55/80)]
 
     t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0],))
     if output_size[1] // input_size[1] > 1:

@@ -26,7 +26,6 @@ import trimesh
 
 import time
 import tqdm
-
 import json
 
 cNorm = colors.Normalize(vmin=0, vmax=1)
@@ -52,8 +51,10 @@ def train_one_epoch(model: torch.nn.Module,
                     device: torch.device, epoch: int, loss_scaler,
                     log_writer=None,
                     ema = None,
-                    args=None):
-    model.train(True)
+                    args=None,
+                    set_training_mode=False):
+    if set_training_mode:
+        model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
@@ -176,11 +177,14 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
         mats_dict = batch[1]
         timestamps = batch[2]
         img_metas = batch[3]
-        images_high_res = batch[4]
-        images_low_res = batch[5]
+        images_low_res = batch[4]
+        images_high_res = batch[5]
         
         images_low_res = images_low_res.to(device, non_blocking=True)
         images_high_res = images_high_res.to(device, non_blocking=True)
+        cam_imgs = cam_imgs.to(device, non_blocking=True)
+        mats_dict = {k: v.to(device, non_blocking=True) for k, v in mats_dict.items()}
+        timestamps = timestamps.to(device, non_blocking=True)
         
         global_step += 1
         # compute output

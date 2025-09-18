@@ -72,7 +72,7 @@ warmup_epochs: 60  # From bash script
 roll: false
 
 # Checkpoint and logging
-output_dir: './experiment/kitti/tulip_base'
+output_dir: './experiment/nusc/cmtulip_base'
 log_dir: './output_dir'
 save_frequency: 100
 num_workers: 8
@@ -85,9 +85,9 @@ noise_threshold: 0.03
 grid_size: 0.1
 
 # Logging and monitoring
-wandb_disabled: true
+wandb_disabled: false
 entity: 'pnp_dnp'
-project_name: 'upsample'
+project_name: 'upsample_eval'
 run_name: 'cmtulip_base_nusc'
 
 # Device configuration

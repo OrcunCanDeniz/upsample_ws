@@ -2,7 +2,7 @@
 # This file shows how to configure TULIP for KITTI dataset
 
 # Model selection and architecture
-model_select: 'tulip_small'  # Use base TULIP model for KITTI
+model_select: 'tulip_base'  # Use base TULIP model for KITTI
 window_size: [2, 8]
 patch_size: [1, 4]
 pixel_shuffle: true  # improve
@@ -58,7 +58,7 @@ keep_close_scan: false
 keep_far_scan: false
 
 # Training configuration
-batch_size: 8  # From bash script
+batch_size: 16  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
@@ -71,7 +71,7 @@ warmup_epochs: 60  # From bash script
 roll: false
 
 # Checkpoint and logging
-output_dir: './experiment/nuscenes/tulip_base'
+output_dir: './experiment/nuscenes/tulip_base_b16_prepfix'
 log_dir: './output_dir'
 save_frequency: 100
 num_workers: 2
@@ -86,8 +86,8 @@ grid_size: 0.1
 # Logging and monitoring
 wandb_disabled: false
 entity: 'pnp_dnp'
-project_name: 'upsample'
-run_name: 'tulip_base_nuscenes'
+project_name: 'upsample_eval'
+run_name: 'tulip_base_b16_nusc_r55'
 
 # Device configuration
 device: 'cuda'

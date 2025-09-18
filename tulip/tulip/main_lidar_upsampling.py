@@ -18,19 +18,16 @@ from mmcv import Config
 import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
+
 from util.datasets import generate_dataset, collate_fn
-from util.pos_embed import interpolate_pos_embed
 
 import timm.optim.optim_factory as optim_factory
-from timm.models.layers import trunc_normal_
 
 import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 
 import model.tulip as tulip
-from model.CMTulip import CMTULIP
+from model.CMTulip import CMTULIP, freeze_multiview_backbone, unfreeze_multiview_backbone
 import wandb
 
 
@@ -147,7 +144,8 @@ def main(args):
         num_workers=config.num_workers,
         pin_memory=config.pin_mem,
         drop_last=True,
-        collate_fn=collate_func
+        collate_fn=collate_func,
+        persistent_workers=True
     )
 
 
@@ -234,6 +232,10 @@ def main(args):
     print("accumulate grad iterations: %d" % config.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
 
+    if config.model_select == "CMTULIP":
+        if not args.eval:
+            model.train(True)
+            freeze_multiview_backbone(model)
     if config.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.gpu], find_unused_parameters=False)
         model_without_ddp = model.module
@@ -241,6 +243,22 @@ def main(args):
     # following timm: set wd as 0 for bias and norm layers
     # param_groups = optim_factory.add_weight_decay(model_without_ddp, args.weight_decay)
     param_groups = optim_factory.param_groups_layer_decay(model_without_ddp, config.weight_decay)
+    if config.model_select == "CMTULIP":
+        # Set different lr and weight decay for multiview_backbone, even though it is frozen in the first phase
+        # these setting will take effect as the backbone is unfrozen in later epochs
+        config.backbone_lr_scale = getattr(config, 'backbone_lr_scale', 0.1)
+        config.backbone_weight_decay = getattr(config, 'backbone_weight_decay', 0.005)  # << smaller WD
+        bb_ids = {id(p) for p in model_without_ddp.multiview_backbone.parameters()}
+
+        for g in param_groups:
+            scale = g.pop("lr_scale", 1.0)
+            is_bb = any(id(p) in bb_ids for p in g["params"])
+            base_lr = (config.lr * config.backbone_lr_scale) if is_bb else config.lr
+            g["lr"] = base_lr * scale
+            if is_bb:
+                g["lr"] = 0.0
+                g["weight_decay"] = 0.0
+
     optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
     print(optimizer)
     loss_scaler = NativeScaler()
@@ -250,9 +268,42 @@ def main(args):
 
     print(f"Start training for {config.epochs} epochs")
     start_time = time.time()
+    phase_one_epochs = getattr(config, "phase_one_epochs", int(0.2 * config.epochs))
+    print(f"Phase one training for {phase_one_epochs} epochs")
+    two_phase_train = (config.model_select == "CMTULIP") and (not args.eval)
     for epoch in range(config.start_epoch, config.epochs):
         if config.distributed:
             data_loader_train.sampler.set_epoch(epoch)
+        if two_phase_train and epoch >= phase_one_epochs:
+            print("Second Phase Training: Unfreeze the multiview backbone")
+            unfreeze_multiview_backbone(model, train_bn=True)
+            if config.distributed:
+                torch.cuda.synchronize()
+                if misc.get_world_size() > 1:
+                    torch.distributed.barrier()
+                model = torch.nn.parallel.DistributedDataParallel(
+                    model.module, device_ids=[config.gpu], find_unused_parameters=False
+                )
+                model_without_ddp = model.module
+            else:
+                # single-GPU: keep model as is
+                model_without_ddp = model
+            # Rebuild param groups
+            param_groups = optim_factory.param_groups_layer_decay(model.module, config.weight_decay)
+            bb_ids = {id(p) for p in model.module.multiview_backbone.parameters()}
+
+            for g in param_groups:
+                scale = g.pop("lr_scale", 1.0)
+                is_bb = any(id(p) in bb_ids for p in g["params"])
+                base_lr = (config.lr * config.backbone_lr_scale) if is_bb else config.lr
+                g["lr"] = base_lr * scale
+                if is_bb:
+                    g["weight_decay"] = config.backbone_weight_decay
+
+            optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
+            optimizer.zero_grad(set_to_none=True)
+            two_phase_train = False
+            
         train_stats = train_one_epoch(
             model, data_loader_train,
             optimizer, device, epoch, loss_scaler,

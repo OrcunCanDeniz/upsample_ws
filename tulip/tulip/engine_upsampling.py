@@ -188,7 +188,7 @@ def evaluate(data_loader, model, device, log_writer, args=None):
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "nuscenes":
-                pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
+                pred_img = torch.where((pred_img >= 0) & (pred_img <=55/80), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             
@@ -444,7 +444,7 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "nuscenes":
-                pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
+                pred_img = torch.where((pred_img >= 0) & (pred_img <= 55/80), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             

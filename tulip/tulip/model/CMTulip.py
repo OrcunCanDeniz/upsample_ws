@@ -14,6 +14,44 @@ import os
 
 import pdb
 
+def _set_bn_eval(module: nn.Module):
+    # Works for BN2d/1d/3d and SyncBatchNorm (all subclass _BatchNorm)
+    if isinstance(module, nn.modules.batchnorm._BatchNorm):
+        module.eval()
+
+def freeze_multiview_backbone(model):
+    """
+    Freeze all parameters of model.multiview_backbone and set its BN layers to eval().
+    Call this AFTER model.to(device) / BEFORE building the optimizer for Phase A.
+    Re-apply _set_bn_eval after any global model.train() call.
+    """
+    m = getattr(model, "module", model)  # handle DDP
+    assert hasattr(m, "multiview_backbone"), "model has no attribute 'multiview_backbone'"
+
+    # 1) Freeze params (incl. BN affine)
+    for p in m.multiview_backbone.parameters():
+        p.requires_grad = False
+
+    # 2) Stop BN running stats updates
+    m.multiview_backbone.apply(_set_bn_eval)
+
+def unfreeze_multiview_backbone(model, train_bn: bool = True):
+    """
+    Unfreeze backbone parameters. If train_bn=True, set BN back to train mode.
+    Otherwise, keep BN stats frozen but allow affine to train (set requires_grad True above).
+    """
+    m = getattr(model, "module", model)
+    assert hasattr(m, "multiview_backbone"), "model has no attribute 'multiview_backbone'"
+
+    # 1) Unfreeze params
+    for p in m.multiview_backbone.parameters():
+        p.requires_grad = True
+
+    # 2) BN behavior
+    if train_bn:
+        m.multiview_backbone.train()      # BN stats update again
+    else:
+        m.multiview_backbone.apply(_set_bn_eval)  # keep stats frozen
 
 class CMTULIP(TULIP):
     def __init__(self, backbone_config, lss_weights_path, **kwargs):
