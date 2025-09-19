@@ -66,7 +66,7 @@ class CMTULIP(TULIP):
         self.multiview_backbone = BaseLSSFPN(**backbone_config)
         self.load_lss_weights(lss_weights_path)
     
-    def load_lss_weights(self, lss_weights_path, strict=True):
+    def load_lss_weights(self, lss_weights_path, strict=False):
         """
         Load LSS weights into the multiview_backbone from a saved checkpoint.
         

@@ -1,21 +1,21 @@
 FROM ubuntu:24.04
 
+# Environment variables to match the non-conda Dockerfile
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CUDA_HOME=/opt/conda/envs/py38
-ENV CUDA_PATH=$CUDA_HOME
-ENV PATH=$CUDA_HOME/bin:$PATH
-ENV LD_LIBRARY_PATH=""
-ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV TORCH_CUDA_ARCH_LIST="7.0;8.0;8.6"
 ENV FORCE_CUDA=1
-ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6+PTX"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/workspace/BEVDepth:/workspace/mmdetection3d
+ENV CUDA_HOME=/opt/conda/envs/py38
+ENV PATH=/opt/conda/envs/py38/bin:${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib:${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
-# Install core system packages
+# System dependencies (no system Python; we'll use conda)
 RUN apt-get update && apt-get install -y \
-    wget bzip2 ca-certificates \
-    python3.8 python3.8-dev python3-pip python3-setuptools \
-    git build-essential libgl1 libglib2.0-0 libsm6 libxext6 \
+    git wget curl \
+    build-essential \
+    libgl1 libglib2.0-0 libsm6 libxext6 \
     python3-tk tk-dev \
-    ninja-build \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Miniconda
@@ -27,53 +27,68 @@ RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86
   && $CONDA_DIR/bin/conda clean -afy \
   && ln -s $CONDA_DIR/etc/profile.d/conda.sh /etc/profile.d/conda.sh
 
-# Use bash login shell so conda is initialized
+# Accept Anaconda ToS for default channels (non-interactive)
+RUN $CONDA_DIR/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    $CONDA_DIR/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+# Use bash for subsequent RUN steps
 SHELL ["bash", "-lc"]
 
-# Update conda and create Python 3.8 environment
-RUN conda tos accept && \
+# Create Python 3.8 environment
+RUN conda init && \
     conda config --set ssl_verify false && \
-    conda update -n base -c defaults conda \
-      && conda create -y -n py38 python=3.8 \
-      && conda clean -afy
+    conda update -n base -c defaults -y conda && \
+    conda create -y -n py38 python=3.8 && \
+    conda clean -afy
 
-# TODO: set ld path from conda_prefix
+# Ensure conda env binaries are preferred at runtime even without explicit activation
+ENV PATH=/opt/conda/envs/py38/bin:$PATH
 
-RUN conda init 
-
-# Inside py38: upgrade pip and install PyTorch+CUDA
+# Core Python tooling
 RUN conda activate py38 && \
-    python3 -m pip install --upgrade pip setuptools wheel && \
-    conda config --set ssl_verify false && \
-    conda install -y cudatoolkit-dev=11.3 -c conda-forge 
+    python -m pip install --upgrade pip setuptools wheel
 
-# Install PyTorch 1.12.0 with CUDA 11.3 (matching main Dockerfile)
+# Skipping CUDA toolkit install; relying on prebuilt wheels for CUDA-enabled packages
+
+# PyTorch 1.12.0 with CUDA 11.3 (same as main Dockerfile)
 RUN conda activate py38 && \
-    python3 -m pip install torch==1.12.0+cu113 torchvision==0.13.0+cu113 torchaudio==0.12.0+cu113 \
+    pip install torch==1.12.0+cu113 torchvision==0.13.0+cu113 torchaudio==0.12.0+cu113 \
     --extra-index-url https://download.pytorch.org/whl/cu113
 
-# Install chamfer distance package (requires GPU for compilation)
+# Python dependencies (use prebuilt wheels to avoid local CUDA builds)
 RUN conda activate py38 && \
-    python3 -m pip install git+https://github.com/otaheri/chamfer_distance
+    pip install einops matplotlib Pillow tensorboardX \
+               trimesh opencv-python pandas tqdm scipy wandb \
+               scikit-learn tensorboard nuscenes-devkit \
+               timm==0.6.12 && \
+    pip install pytorch3d==0.7.2 \
+      -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py38_cu113_pyt1120/download.html
 
-# Install all Python dependencies individually (matching main Dockerfile)
-RUN conda activate py38 && \
-    python3 -m pip install einops matplotlib numpy Pillow tensorboardX trimesh \
-    opencv-python pandas tqdm scipy wandb scikit-learn timm tensorboard \
-    timm==0.6.12 openmim==0.3.9 \
-    "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+# Skip chamfer_distance source build (requires nvcc); add later if needed
 
+# OpenMIM and MM packages (match main Dockerfile)
 RUN conda activate py38 && \
+    pip install --no-cache-dir openmim==0.3.9 && \
     python -m mim install "mmcv-full==1.7.0" && \
     python -m mim install "mmdet==2.28.2" && \
     python -m mim install "mmsegmentation==0.30.0"
 
+# mmdetection3d (same version and editable install)
 RUN conda activate py38 && \
     git clone -b v1.0.0rc4 https://github.com/open-mmlab/mmdetection3d.git && \
-    cd mmdetection3d && pip install -v -e . 
+    cd mmdetection3d && pip install -v -e .
 
-# Set working directory
+# Pin pip then add remaining pins to match main Dockerfile
+RUN conda activate py38 && \
+    python -m pip install "pip<24.1" && \
+    pip install numpy==1.23.5 llvmlite==0.39.1 numba==0.56.4 \
+                pytorch-lightning==1.6.5 "pillow<10.0.0" open3d
+
+# Working directory
 WORKDIR /workspace
 
-# Launch with the conda env activated
-CMD ["bash", "-lc", "conda activate py38 && bash"]
+# Entry point (same as main Dockerfile)
+COPY tulip/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/bash"]
