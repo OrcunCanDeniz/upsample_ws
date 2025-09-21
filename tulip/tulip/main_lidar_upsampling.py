@@ -161,12 +161,14 @@ def main(args):
     
     # define the model
     if config.model_select == "CMTULIP":
-      
+        ef_bs = config.batch_size * config.accum_iter * misc.get_world_size() * 6
+        print(f"Multiview effective batch size: {ef_bs}")
         model = CMTULIP(
             backbone_config=config.backbone,
             img_size=tuple(config.img_size_low_res),
             target_img_size=tuple(config.img_size_high_res),
-            patch_size=tuple(config.patch_size), 
+            patch_size=tuple(config.patch_size),
+            im2col_step=config.im2col_step,
             in_chans=config.in_chans,
             window_size=config.window_size,
             swin_v2=config.swin_v2,

@@ -54,7 +54,7 @@ def unfreeze_multiview_backbone(model, train_bn: bool = True):
         m.multiview_backbone.apply(_set_bn_eval)  # keep stats frozen
 
 class CMTULIP(TULIP):
-    def __init__(self, backbone_config, lss_weights_path, **kwargs):
+    def __init__(self, backbone_config, lss_weights_path, im2col_step=128, **kwargs):
         super(CMTULIP, self).__init__(**kwargs)
 
         # TODO: Integrate the multiview backbone and token learner
@@ -65,6 +65,8 @@ class CMTULIP(TULIP):
         self.apply(self.init_weights)
         self.multiview_backbone = BaseLSSFPN(**backbone_config)
         self.load_lss_weights(lss_weights_path)
+        self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
+
     
     def load_lss_weights(self, lss_weights_path, strict=False):
         """
