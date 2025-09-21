@@ -29,6 +29,7 @@ from util.misc import NativeScalerWithGradNormCount as NativeScaler
 import model.tulip as tulip
 from model.CMTulip import CMTULIP, freeze_multiview_backbone, unfreeze_multiview_backbone
 import wandb
+from util.wandb_artifact import WandbArtifactHook
 
 
 def load_config(args):
@@ -73,8 +74,24 @@ def main(args):
     else:
         from engine_upsampling import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop
     
+    # Add datetime timestamp to output_dir to ensure each run has distinct space
     if config.output_dir and not args.eval:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        original_output_dir = config.output_dir
+        config.output_dir = f"{original_output_dir}_{timestamp}"
         Path(config.output_dir).mkdir(parents=True, exist_ok=True)
+        print(f"Output directory: {config.output_dir}")
+    elif config.output_dir and args.eval:
+        # For evaluation, check if it's a specific checkpoint file or directory
+        if config.output_dir.endswith("pth"):
+            # If it's a checkpoint file, use its directory as output_dir
+            config.resume = config.output_dir
+            config.output_dir = os.path.dirname(config.output_dir)
+            print(f"Evaluation mode - checkpoint file: {config.resume}")
+            print(f"Evaluation mode - output directory: {config.output_dir}")
+        else:
+            # If it's a directory, use it as-is
+            print(f"Evaluation mode - using output directory: {config.output_dir}")
     
     # Use MMCV Config object directly - no intermediate args variable needed
     misc.init_distributed_mode(config)
@@ -116,6 +133,7 @@ def main(args):
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     # Logger is only used in one rank
+    wandb_artifact_hook = None
     if global_rank == 0:
         if config.wandb_disabled:
             mode = "disabled"
@@ -127,6 +145,15 @@ def main(args):
                     mode=mode,
                     sync_tensorboard=True)
         wandb.config.update(config)
+        
+        # Initialize WandbArtifactHook for automatic checkpoint uploading
+        if not config.wandb_disabled:
+            wandb_artifact_hook = WandbArtifactHook(
+                wandb_entity=config.entity,
+                wandb_project=config.project_name,
+                dir_path=config.output_dir
+            )
+            wandb_artifact_hook.before_run(output_dir=config.output_dir, logger=None)
     if global_rank == 0 and config.log_dir is not None:
         os.makedirs(config.log_dir, exist_ok=True)
         log_writer = SummaryWriter(log_dir=config.log_dir)
@@ -194,10 +221,8 @@ def main(args):
     
     if args.eval and os.path.exists(config.output_dir):
         print("Loading Checkpoint and directly start the evaluation")
-        if config.output_dir.endswith("pth"):
-            config.resume = config.output_dir
-            config.output_dir = os.path.dirname(config.output_dir)
-        else:
+        # Checkpoint file handling is already done above
+        if not config.output_dir.endswith("pth"):
             get_latest_checkpoint(config)
         misc.load_model(
                 args=config, model_without_ddp=model, optimizer=None,
@@ -316,6 +341,14 @@ def main(args):
             misc.save_model(
                 args=config, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=loss_scaler, epoch=epoch)
+            
+            # Use WandbArtifactHook to upload checkpoint as wandb artifact
+            if global_rank == 0 and wandb_artifact_hook is not None:
+                try:
+                    wandb_artifact_hook.after_train_epoch()
+                    print(f"Uploaded checkpoint artifacts for epoch {epoch}")
+                except Exception as e:
+                    print(f"Warning: Failed to upload checkpoint as wandb artifact: {e}")
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                         'epoch': epoch,}
