@@ -29,6 +29,7 @@ class WandbArtifactHook:
         self.run_id = None
         self.run_name = None
         self.logger = None
+        self.artifact_name = None
                     
     def scan_files(self):
         files = {}
@@ -53,16 +54,13 @@ class WandbArtifactHook:
         arti_files = self.check_new_or_modified_files()
         
         if len(arti_files) != 0:
-            # Create a unique artifact name with timestamp
-            import time
-            timestamp = int(time.time())
+            # Use a consistent artifact name for the entire run
             wandb_artifact = self.wandb.Artifact(
-                    name=f'{self.run_name}_weights_{timestamp}', type='model')
+                    name=self.artifact_name, type='model')
             
             # Add metadata to the artifact
             wandb_artifact.metadata['run_name'] = self.run_name
             wandb_artifact.metadata['run_id'] = self.run_id
-            wandb_artifact.metadata['upload_timestamp'] = timestamp
             wandb_artifact.metadata['file_count'] = len(arti_files)
             wandb_artifact.metadata['files'] = arti_files
             
@@ -94,6 +92,9 @@ class WandbArtifactHook:
             self.run = self.wandb.init(entity=self.wandb_entity, project=self.wandb_project, resume=True)
             self.run_id = self.run.id
             self.run_name = self.run.name
+        
+        # Fixed artifact name tied to this run
+        self.artifact_name = f'{self.run_id}_weights'
      
         self.files = self.scan_files()
 

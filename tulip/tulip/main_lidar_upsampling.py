@@ -139,7 +139,8 @@ def main(args):
             mode = "disabled"
         else:
             mode = "online"
-        wandb.init(project=config.project_name,
+        project_name = f"{config.project_name}_eval" if args.eval else config.project_name
+        wandb.init(project=project_name,
                     entity=config.entity,
                     name = config.run_name, 
                     mode=mode,
@@ -150,7 +151,7 @@ def main(args):
         if not config.wandb_disabled:
             wandb_artifact_hook = WandbArtifactHook(
                 wandb_entity=config.entity,
-                wandb_project=config.project_name,
+                wandb_project=project_name,
                 dir_path=config.output_dir
             )
             wandb_artifact_hook.before_run(output_dir=config.output_dir, logger=None)
