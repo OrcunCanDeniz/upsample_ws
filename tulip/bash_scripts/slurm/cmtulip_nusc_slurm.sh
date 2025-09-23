@@ -47,7 +47,7 @@ export https_proxy="http://proxy.nhr.fau.de:80"
      bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38' \
      bash -lc '
       cd ${CODE_DIR}
-      ./bash_scripts/cmtulip_upsampling_nusc.sh
+      ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"
     '
         # --cfg-options dist_params.backend=gloo \
 # Stage back your model outputs

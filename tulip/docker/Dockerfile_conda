@@ -2,17 +2,18 @@ FROM ubuntu:24.04
 
 # Environment variables to match the non-conda Dockerfile
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TORCH_CUDA_ARCH_LIST="7.0;8.0;8.6"
-ENV FORCE_CUDA=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/workspace/BEVDepth:/workspace/mmdetection3d
 ENV CUDA_HOME=/opt/conda/envs/py38
-ENV PATH=/opt/conda/envs/py38/bin:${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib:${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+ENV CUDA_PATH=$CUDA_HOME
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=""
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="7.0;8.0;8.6"
 
 # System dependencies (no system Python; we'll use conda)
 RUN apt-get update && apt-get install -y \
     git wget curl \
+    gcc-9 g++-9 make pkg-config \
     build-essential \
     libgl1 libglib2.0-0 libsm6 libxext6 \
     python3-tk tk-dev \
@@ -27,28 +28,27 @@ RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86
   && $CONDA_DIR/bin/conda clean -afy \
   && ln -s $CONDA_DIR/etc/profile.d/conda.sh /etc/profile.d/conda.sh
 
-# Accept Anaconda ToS for default channels (non-interactive)
-RUN $CONDA_DIR/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
-    $CONDA_DIR/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-
-# Use bash for subsequent RUN steps
+# Use bash login shell so conda is initialized
 SHELL ["bash", "-lc"]
 
-# Create Python 3.8 environment
-RUN conda init && \
+# Update conda and create Python 3.8 environment
+RUN conda tos accept && \
     conda config --set ssl_verify false && \
-    conda update -n base -c defaults -y conda && \
-    conda create -y -n py38 python=3.8 && \
-    conda clean -afy
+    conda update -n base -c defaults conda \
+      && conda create -y -n py38 python=3.8 \
+      && conda clean -afy
 
-# Ensure conda env binaries are preferred at runtime even without explicit activation
-ENV PATH=/opt/conda/envs/py38/bin:$PATH
+RUN conda init 
 
-# Core Python tooling
+# Inside py38: upgrade pip and install PyTorch+CUDA
 RUN conda activate py38 && \
-    python -m pip install --upgrade pip setuptools wheel
+    python3 -m pip install --upgrade pip setuptools wheel && \
+    conda config --set ssl_verify false && \
+    conda install -y cudatoolkit-dev=11.3 -c conda-forge 
 
-# Skipping CUDA toolkit install; relying on prebuilt wheels for CUDA-enabled packages
+RUN conda activate py38 && \
+    conda install -y -c conda-forge libxcrypt
+
 
 # PyTorch 1.12.0 with CUDA 11.3 (same as main Dockerfile)
 RUN conda activate py38 && \
@@ -82,13 +82,39 @@ RUN conda activate py38 && \
 RUN conda activate py38 && \
     python -m pip install "pip<24.1" && \
     pip install numpy==1.23.5 llvmlite==0.39.1 numba==0.56.4 \
-                pytorch-lightning==1.6.5 "pillow<10.0.0" open3d
+                pytorch-lightning==1.6.5 "pillow<10.0.0" open3d \
+                git+https://github.com/otaheri/chamfer_distance 
+    
 
 # Working directory
 WORKDIR /workspace
 
+ENV CC=/usr/bin/gcc-9 \
+    CXX=/usr/bin/g++-9 \
+    CUDAHOSTCXX=/usr/bin/g++-9 \
+    LD=/usr/bin/ld
+
+# put system bin first
+ENV PATH=/usr/bin:$PATH
+
+ENV LD_LIBRARY_PATH= \
+    CONDA_BUILD_SYSROOT= \
+    CFLAGS= \
+    CXXFLAGS= \
+    LDFLAGS= \
+    NVCC_PREPEND_FLAGS= \
+    TORCH_NVCC_FLAGS=
+
+RUN conda activate py38 && \
+    cd /opt/ && \
+    git clone https://github.com/Megvii-BaseDetection/BEVDepth.git && \
+    cd BEVDepth && \
+    pip install -e .
+
+RUN echo "conda activate py38" >> ~/.bashrc
+
 # Entry point (same as main Dockerfile)
-COPY tulip/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# COPY tulip/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# RUN chmod +x /usr/local/bin/entrypoint.sh
+# ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/bin/bash"]
