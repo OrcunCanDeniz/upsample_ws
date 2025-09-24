@@ -280,12 +280,10 @@ def main(args):
         bb_ids = {id(p) for p in model_without_ddp.multiview_backbone.parameters()}
 
         for g in param_groups:
-            scale = g.pop("lr_scale", 1.0)
             is_bb = any(id(p) in bb_ids for p in g["params"])
-            base_lr = (config.lr * config.backbone_lr_scale) if is_bb else config.lr
-            g["lr"] = base_lr * scale
+            # Preserve layer-wise lr_scale. For phase 1, keep backbone LR at 0 via lr_scale.
             if is_bb:
-                g["lr"] = 0.0
+                g["lr_scale"] = 0.0
                 g["weight_decay"] = 0.0
 
     optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
@@ -322,11 +320,10 @@ def main(args):
             bb_ids = {id(p) for p in model.module.multiview_backbone.parameters()}
 
             for g in param_groups:
-                scale = g.pop("lr_scale", 1.0)
                 is_bb = any(id(p) in bb_ids for p in g["params"])
-                base_lr = (config.lr * config.backbone_lr_scale) if is_bb else config.lr
-                g["lr"] = base_lr * scale
+                # Preserve lr_scale; scale backbone groups for phase 2 fine-tuning
                 if is_bb:
+                    g["lr_scale"] = g.get("lr_scale", 1.0) * config.backbone_lr_scale
                     g["weight_decay"] = config.backbone_weight_decay
 
             optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
