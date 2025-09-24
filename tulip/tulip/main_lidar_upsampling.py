@@ -69,8 +69,13 @@ def main(args):
 
     config = load_config(args)
     
+    collate_func = None
     if config.model_select == "CMTULIP":
         from engine_upsampling_w_image import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop
+        im2col_step = get_config_value(config, 'batch_size') * 6 # assuming cam 6 views
+        config.im2col_step = im2col_step
+        
+        collate_func = collate_fn
     else:
         from engine_upsampling import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop
     
@@ -161,10 +166,6 @@ def main(args):
     else:
         log_writer = None
 
-
-    collate_func = None
-    if config.model_select == "CMTULIP":
-        collate_func = collate_fn
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,

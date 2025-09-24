@@ -3,10 +3,10 @@
 #SBATCH --job-name=CMTULIP_train               # your job name
 #SBATCH --nodes=1                          # 1 node
 #SBATCH --ntasks-per-node=1                # one srun task per node
-#SBATCH --gres=gpu:a100:4               # 8 GPUs on that node
-#SBATCH --cpus-per-task=32                  # CPUs for data loading, etc.
+#SBATCH --gres=gpu:a40:6               # 8 GPUs on that node
+#SBATCH --cpus-per-task=48                  # CPUs for data loading, etc.
 #SBATCH --time=24:00:00                    # hh:mm:ss walltime
-#SBATCH --partition=a100                 # GPU partition
+#SBATCH --partition=a40                 # GPU partition
 # (no --output/--error here—handled by srun instead)
 
 # Paths (adjust to your environment)
@@ -44,11 +44,7 @@ export https_proxy="http://proxy.nhr.fau.de:80"
     --env http_proxy="${http_proxy}" \
     --env https_proxy="${https_proxy}" \
     "${SIF_IMAGE}" \
-     bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38' \
-     bash -lc '
-      cd ${CODE_DIR}
-      ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"
-    '
+     bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 &&  cd ${CODE_DIR} && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"'
         # --cfg-options dist_params.backend=gloo \
 # Stage back your model outputs
 cp -r "${NODE_LOCAL_ARTEFACTS_DIR}" "${LOCAL_ARTEFACTS_DIR}/"
