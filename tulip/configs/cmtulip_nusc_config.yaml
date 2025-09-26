@@ -45,6 +45,7 @@ backbone:
   depth_net_conf:
     in_channels: 512
     mid_channels: 512
+  cache_geometry: true
 
 # Dataset configuration for KITTI
 dataset_select: 'nuscenes_with_image'

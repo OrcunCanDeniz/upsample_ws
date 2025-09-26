@@ -325,7 +325,8 @@ class BaseLSSFPN(nn.Module):
                  img_backbone_conf,
                  img_neck_conf,
                  depth_net_conf,
-                 use_da=False):
+                 use_da=False,
+                 cache_geometry=False):
         """Modified from `https://github.com/nv-tlabs/lift-splat-shoot`.
 
         Args:
@@ -374,6 +375,9 @@ class BaseLSSFPN(nn.Module):
         if self.use_da:
             self.depth_aggregation_net = self._configure_depth_aggregation_net(
             )
+            
+        self.geom_cache = None
+        self.store_geometry = cache_geometry
 
     def _configure_depth_net(self, depth_net_conf):
         return DepthNet(
@@ -515,14 +519,30 @@ class BaseLSSFPN(nn.Module):
         )
         depth = depth_feature[:, :self.depth_channels].softmax(
             dim=1, dtype=depth_feature.dtype)
-        geom_xyz = self.get_geometry(
-            mats_dict['sensor2ego_mats'][:, sweep_index, ...],
-            mats_dict['intrin_mats'][:, sweep_index, ...],
-            mats_dict['ida_mats'][:, sweep_index, ...],
-            mats_dict.get('bda_mat', None),
-        )
-        geom_xyz = ((geom_xyz - (self.voxel_coord - self.voxel_size / 2.0)) /
-                    self.voxel_size).int()
+        
+        if self.store_geometry:
+            if self.geom_cache is None:
+                geom_xyz = self.get_geometry(
+                    mats_dict['sensor2ego_mats'][:, sweep_index, ...],
+                    mats_dict['intrin_mats'][:, sweep_index, ...],
+                    mats_dict['ida_mats'][:, sweep_index, ...],
+                    mats_dict.get('bda_mat', None),
+                )
+                geom_xyz = ((geom_xyz - (self.voxel_coord - self.voxel_size / 2.0)) /
+                            self.voxel_size).int()
+                self.geom_cache = geom_xyz
+            else:
+                geom_xyz = self.geom_cache
+        else:
+            geom_xyz = self.get_geometry(
+                    mats_dict['sensor2ego_mats'][:, sweep_index, ...],
+                    mats_dict['intrin_mats'][:, sweep_index, ...],
+                    mats_dict['ida_mats'][:, sweep_index, ...],
+                    mats_dict.get('bda_mat', None),
+                )
+            geom_xyz = ((geom_xyz - (self.voxel_coord - self.voxel_size / 2.0)) /
+                            self.voxel_size).int()
+            
         if self.training or self.use_da:
             img_feat_with_depth = depth.unsqueeze(
                 1) * depth_feature[:, self.depth_channels:(
