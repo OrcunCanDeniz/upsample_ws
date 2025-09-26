@@ -62,6 +62,54 @@ def get_args_parser():
 
     return parser
 
+def build_backbone_split_param_groups(
+    model: torch.nn.Module,
+    base_param_groups,
+    *,
+    backbone_attr: str = "multiview_backbone",
+    phase: int,
+    phase_one_lr_scale: float = 0.0,
+    phase_one_weight_decay: float = 0.0,
+    phase_two_lr_scale: float = 0.1,
+    phase_two_weight_decay: float = 0.005,
+):
+    """Return optimizer param groups where backbone params are separated and adjusted.
+
+    Parameters
+    - model: model that contains the backbone under `backbone_attr`.
+    - base_param_groups: param groups produced by timm's optim factory.
+    - backbone_attr: attribute name of the backbone in model/module.
+    - phase: 1 or 2; controls how backbone group's lr/weight_decay are set.
+    - phase_one_lr_scale / phase_one_weight_decay: overrides for phase 1 (frozen bb).
+    - phase_two_lr_scale / phase_two_weight_decay: overrides for phase 2 (unfrozen bb).
+    """
+    backbone_module = getattr(model, backbone_attr)
+    backbone_param_ids = {id(p) for p in backbone_module.parameters()}
+
+    split_param_groups = []
+    for group in base_param_groups:
+        params_backbone = [p for p in group["params"] if id(p) in backbone_param_ids]
+        params_non_backbone = [p for p in group["params"] if id(p) not in backbone_param_ids]
+
+        if len(params_non_backbone) > 0:
+            new_group_non_backbone = {k: v for k, v in group.items() if k != "params"}
+            new_group_non_backbone["params"] = params_non_backbone
+            split_param_groups.append(new_group_non_backbone)
+
+        if len(params_backbone) > 0:
+            new_group_backbone = {k: v for k, v in group.items() if k != "params"}
+            new_group_backbone["params"] = params_backbone
+            if phase == 1:
+                new_group_backbone["lr_scale"] = phase_one_lr_scale
+                new_group_backbone["weight_decay"] = phase_one_weight_decay
+            else:
+                # keep any existing lr_scale, but apply multiplicative scale for backbone
+                new_group_backbone["lr_scale"] = new_group_backbone.get("lr_scale", 1.0) * phase_two_lr_scale
+                new_group_backbone["weight_decay"] = phase_two_weight_decay
+            split_param_groups.append(new_group_backbone)
+
+    return split_param_groups
+
 def main(args):
     # Load configuration from YAML file using MMCV Config
     args = get_args_parser()
@@ -273,18 +321,20 @@ def main(args):
     # param_groups = optim_factory.add_weight_decay(model_without_ddp, args.weight_decay)
     param_groups = optim_factory.param_groups_layer_decay(model_without_ddp, config.weight_decay)
     if config.model_select == "CMTULIP":
-        # Set different lr and weight decay for multiview_backbone, even though it is frozen in the first phase
-        # these setting will take effect as the backbone is unfrozen in later epochs
+        # Configure defaults (can be overridden by config)
         config.backbone_lr_scale = getattr(config, 'backbone_lr_scale', 0.1)
-        config.backbone_weight_decay = getattr(config, 'backbone_weight_decay', 0.005)  # << smaller WD
-        bb_ids = {id(p) for p in model_without_ddp.multiview_backbone.parameters()}
+        config.backbone_weight_decay = getattr(config, 'backbone_weight_decay', 0.005)
 
-        for g in param_groups:
-            is_bb = any(id(p) in bb_ids for p in g["params"])
-            # Preserve layer-wise lr_scale. For phase 1, keep backbone LR at 0 via lr_scale.
-            if is_bb:
-                g["lr_scale"] = 0.0
-                g["weight_decay"] = 0.0
+        param_groups = build_backbone_split_param_groups(
+            model_without_ddp,
+            param_groups,
+            backbone_attr="multiview_backbone",
+            phase=1,
+            phase_one_lr_scale=0.0,
+            phase_one_weight_decay=0.0,
+            phase_two_lr_scale=config.backbone_lr_scale,
+            phase_two_weight_decay=config.backbone_weight_decay,
+        )
 
     optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
     print(optimizer)
@@ -315,16 +365,18 @@ def main(args):
             else:
                 # single-GPU: keep model as is
                 model_without_ddp = model
-            # Rebuild param groups
+            # Rebuild and split param groups for phase 2
             param_groups = optim_factory.param_groups_layer_decay(model.module, config.weight_decay)
-            bb_ids = {id(p) for p in model.module.multiview_backbone.parameters()}
-
-            for g in param_groups:
-                is_bb = any(id(p) in bb_ids for p in g["params"])
-                # Preserve lr_scale; scale backbone groups for phase 2 fine-tuning
-                if is_bb:
-                    g["lr_scale"] = g.get("lr_scale", 1.0) * config.backbone_lr_scale
-                    g["weight_decay"] = config.backbone_weight_decay
+            param_groups = build_backbone_split_param_groups(
+                model.module,
+                param_groups,
+                backbone_attr="multiview_backbone",
+                phase=2,
+                phase_one_lr_scale=0.0,
+                phase_one_weight_decay=0.0,
+                phase_two_lr_scale=config.backbone_lr_scale,
+                phase_two_weight_decay=config.backbone_weight_decay,
+            )
 
             optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
             optimizer.zero_grad(set_to_none=True)
