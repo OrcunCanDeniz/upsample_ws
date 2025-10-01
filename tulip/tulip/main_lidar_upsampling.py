@@ -228,7 +228,16 @@ def main(args):
             config.wandb_run_id = wandb.run.id
         except Exception:
             pass
-        wandb.config.update(config)
+        # Update wandb config with a plain dict to avoid MMCV Config internals
+        try:
+            cfg_dict = config.to_dict() if hasattr(config, 'to_dict') else dict(config)
+        except Exception:
+            # Fallback: access internal cfg dict when available
+            try:
+                cfg_dict = config._cfg_dict.to_dict()
+            except Exception:
+                cfg_dict = {}
+        wandb.config.update(cfg_dict, allow_val_change=True)
         
         # Initialize WandbArtifactHook for automatic checkpoint uploading
         if not config.wandb_disabled:
