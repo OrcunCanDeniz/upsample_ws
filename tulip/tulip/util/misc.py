@@ -350,6 +350,26 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, sa
                 'phase2_start': phase2_start
             }
 
+            # Persist wandb run id for resume/traceability if wandb is enabled
+            try:
+                if hasattr(args, 'wandb_disabled') and not args.wandb_disabled:
+                    run_id = None
+                    try:
+                        import wandb  # local import to avoid hard dependency
+                        if getattr(wandb, 'run', None) is not None:
+                            run_id = wandb.run.id
+                    except Exception:
+                        run_id = None
+                    # Fallbacks: env var then value possibly stored on args/config
+                    if run_id is None:
+                        run_id = os.getenv('WANDB_RUN_ID', None)
+                    if run_id is None:
+                        run_id = getattr(args, 'wandb_run_id', None)
+                    if run_id is not None:
+                        to_save['wandb_run_id'] = run_id
+            except Exception:
+                pass
+
             save_on_master(to_save, checkpoint_path)
     else:
         client_state = {'epoch': epoch}

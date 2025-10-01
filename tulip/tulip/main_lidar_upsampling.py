@@ -185,6 +185,19 @@ def main(args):
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
+    phase2_start = None
+    start_from_p2 = False
+    checkpoint = None
+    if config.resume:
+        print(f"Loading checkpoint from: {config.resume} for training")
+        checkpoint = torch.load(config.resume, map_location='cpu')
+        phase2_start = checkpoint.get('phase2_start', int(0.2 * config.epochs))
+        start_from_p2 = checkpoint['epoch'] >= phase2_start     
+    else:
+        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))   
+        start_from_p2 = False
+    print(f"Phase2 start epoch: {phase2_start}, Start from phase2: {start_from_p2}")
+
     # Logger is only used in one rank
     wandb_artifact_hook = None
     if global_rank == 0:
@@ -193,11 +206,28 @@ def main(args):
         else:
             mode = "online"
         project_name = f"{config.project_name}_eval" if args.eval else config.project_name
-        wandb.init(project=project_name,
+        # Prepare wandb init kwargs to optionally resume with a specific run id from config
+        cfg_wandb_run_id = config.get('wandb_run_id', None)
+        wandb_run_id = checkpoint.get('wandb_run_id', cfg_wandb_run_id)
+        is_resume_training = bool(getattr(config, 'resume', None)) and not args.eval
+        wandb_init_kwargs = dict(
+                    project=project_name,
                     entity=config.entity,
-                    name = config.run_name, 
+                    name=config.run_name,
                     mode=mode,
-                    sync_tensorboard=True)
+                    sync_tensorboard=True,
+                )
+        if wandb_run_id is not None and is_resume_training:
+            # will only need same run id logging when resuming training
+            wandb_init_kwargs['id'] = wandb_run_id
+            wandb_init_kwargs['resume'] = 'must'
+
+        wandb.init(**wandb_init_kwargs)
+        # Record the actual run id back to config for downstream components
+        try:
+            config.wandb_run_id = wandb.run.id
+        except Exception:
+            pass
         wandb.config.update(config)
         
         # Initialize WandbArtifactHook for automatic checkpoint uploading
@@ -308,18 +338,6 @@ def main(args):
 
     print("accumulate grad iterations: %d" % config.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
-
-    phase2_start = None
-    start_from_p2 = False
-    if config.resume:
-        print(f"Loading checkpoint from: {config.resume} for training")
-        checkpoint = torch.load(config.resume, map_location='cpu')
-        phase2_start = checkpoint.get('phase2_start', int(0.2 * config.epochs))
-        start_from_p2 = checkpoint['epoch'] >= phase2_start     
-    else:
-        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))   
-        start_from_p2 = False
-    print(f"Phase2 start epoch: {phase2_start}, Start from phase2: {start_from_p2}")
     
     model.train(True)
     if config.model_select == "CMTULIP":
