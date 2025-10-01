@@ -309,10 +309,23 @@ def main(args):
     print("accumulate grad iterations: %d" % config.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
 
+    phase2_start = None
+    start_from_p2 = False
+    if config.resume:
+        print(f"Loading checkpoint from: {config.resume} for training")
+        checkpoint = torch.load(config.resume, map_location='cpu')
+        phase2_start = checkpoint.get('phase2_start', int(0.2 * config.epochs))
+        start_from_p2 = checkpoint['epoch'] >= phase2_start     
+    else:
+        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))   
+        start_from_p2 = False
+    print(f"Phase2 start epoch: {phase2_start}, Start from phase2: {start_from_p2}")
+    
+    model.train(True)
     if config.model_select == "CMTULIP":
         if not args.eval:
-            model.train(True)
-            freeze_multiview_backbone(model)
+            if not start_from_p2:
+                freeze_multiview_backbone(model)
     if config.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.gpu], find_unused_parameters=False)
         model_without_ddp = model.module
@@ -329,7 +342,7 @@ def main(args):
             model_without_ddp,
             param_groups,
             backbone_attr="multiview_backbone",
-            phase=1,
+            phase=1 if not start_from_p2 else 2,
             phase_one_lr_scale=0.0,
             phase_one_weight_decay=0.0,
             phase_two_lr_scale=config.backbone_lr_scale,
@@ -343,15 +356,13 @@ def main(args):
 
     misc.load_model(args=config, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
-    print(f"Start training for {config.epochs} epochs")
+    print(f"Start training for {config.epochs - config.start_epoch} epochs")
     start_time = time.time()
-    phase_one_epochs = getattr(config, "phase_one_epochs", int(0.2 * config.epochs))
-    print(f"Phase one training for {phase_one_epochs} epochs")
-    two_phase_train = (config.model_select == "CMTULIP") and (not args.eval)
+    two_phase_train = (config.model_select == "CMTULIP") and (not args.eval) and not start_from_p2
     for epoch in range(config.start_epoch, config.epochs):
         if config.distributed:
             data_loader_train.sampler.set_epoch(epoch)
-        if two_phase_train and epoch >= phase_one_epochs:
+        if two_phase_train and epoch >= phase2_start:
             print("Second Phase Training: Unfreeze the multiview backbone")
             unfreeze_multiview_backbone(model, train_bn=True)
             if config.distributed:
@@ -388,10 +399,18 @@ def main(args):
             log_writer=log_writer,
             args=config
         )
+        
+        # Save latest.pth after every epoch
+        if config.output_dir:
+            misc.save_model(
+                args=config, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                loss_scaler=loss_scaler, epoch=epoch, save_as_latest=True, phase2_start=phase2_start)
+        
+        # Save regular checkpoints only at save_frequency intervals
         if config.output_dir and (epoch % config.save_frequency == 0 or epoch + 1 == config.epochs):
             misc.save_model(
                 args=config, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                loss_scaler=loss_scaler, epoch=epoch)
+                loss_scaler=loss_scaler, epoch=epoch, phase2_start=phase2_start)
             
             # Use WandbArtifactHook to upload checkpoint as wandb artifact
             if global_rank == 0 and wandb_artifact_hook is not None:
