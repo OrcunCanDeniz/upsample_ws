@@ -24,7 +24,8 @@ except Exception:
     from math import inf
 
 
-import itertools
+import itertools, pdb
+
 
 
 class SmoothedValue(object):
@@ -333,11 +334,12 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     return total_norm
 
 
-def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
+def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, save_as_latest=False, phase2_start=0):
     output_dir = Path(args.output_dir)
     epoch_name = str(epoch)
     if loss_scaler is not None:
-        checkpoint_paths = [output_dir / ('checkpoint-%s.pth' % epoch_name)]
+        ckpt_name = "latest.pth" if save_as_latest else f"checkpoint-{epoch_name}.pth"
+        checkpoint_paths = [ output_dir / ckpt_name]
         for checkpoint_path in checkpoint_paths:
             to_save = {
                 'model': model_without_ddp.state_dict(),
@@ -345,12 +347,34 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
                 'epoch': epoch,
                 'scaler': loss_scaler.state_dict(),
                 'args': args,
+                'phase2_start': phase2_start
             }
+
+            # Persist wandb run id for resume/traceability if wandb is enabled
+            try:
+                if hasattr(args, 'wandb_disabled') and not args.wandb_disabled:
+                    run_id = None
+                    try:
+                        import wandb  # local import to avoid hard dependency
+                        if getattr(wandb, 'run', None) is not None:
+                            run_id = wandb.run.id
+                    except Exception:
+                        run_id = None
+                    # Fallbacks: env var then value possibly stored on args/config
+                    if run_id is None:
+                        run_id = os.getenv('WANDB_RUN_ID', None)
+                    if run_id is None:
+                        run_id = getattr(args, 'wandb_run_id', None)
+                    if run_id is not None:
+                        to_save['wandb_run_id'] = run_id
+            except Exception:
+                pass
 
             save_on_master(to_save, checkpoint_path)
     else:
         client_state = {'epoch': epoch}
-        model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
+        tag = "latest" if save_as_latest else f"checkpoint-{epoch_name}"
+        model.save_checkpoint(save_dir=args.output_dir, tag=tag, client_state=client_state)
 
 
 def check_match(a, b):
