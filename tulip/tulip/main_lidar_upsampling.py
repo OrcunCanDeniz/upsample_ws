@@ -207,9 +207,13 @@ def main(args):
             mode = "online"
         project_name = f"{config.project_name}_eval" if args.eval else config.project_name
         # Prepare wandb init kwargs to optionally resume with a specific run id from config
-        cfg_wandb_run_id = config.get('wandb_run_id', None)
-        wandb_run_id = checkpoint.get('wandb_run_id', cfg_wandb_run_id)
         is_resume_training = bool(getattr(config, 'resume', None)) and not args.eval
+        wandb_run_id = None
+        if is_resume_training:
+            cfg_wandb_run_id = config.get('wandb_run_id', None)
+            if checkpoint is not None:
+                wandb_run_id = checkpoint.get('wandb_run_id', cfg_wandb_run_id)
+            
         wandb_init_kwargs = dict(
                     project=project_name,
                     entity=config.entity,
