@@ -40,6 +40,7 @@ import torch
 from torchvision.datasets.vision import VisionDataset
 import pdb
 from pathlib import Path
+import quaternion  # pip install numpy-quaternion
 
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp', '.jpx')
 NPY_EXTENSIONS = ('.npy', '.rimg', '.bin')
@@ -56,6 +57,31 @@ def generate_dataset(args, is_train):
     dataset = dataset_list[args.dataset_select]
     return dataset(is_train, args)
 
+
+def tf_mat_sensor_to_ego(cal):
+    """
+    Build 4x4 homogeneous transform so that (row-vector) points_at_ego = points_at_lidar @ T
+
+    cal: dict with keys 'translation' (x,y,z) and 'rotation' (w,x,y,z) from nuScenes calibrated_sensor.
+    Returns: (4,4) NumPy array T.
+    
+    Example:
+        # Apply to lidar points (row-vector convention)
+        pts_lidar = np.array([[1.0, 2.0, 3.0]])
+        pts_h = np.hstack([pts_lidar, np.ones((pts_lidar.shape[0], 1))])
+        pts_ego = pts_h @ T
+    """
+    t = np.asarray(cal['translation'], dtype=float)   # [tx, ty, tz]
+    w, x, y, z = map(float, cal['rotation'])          # nuScenes uses [w, x, y, z]
+
+    # create quaternion and normalize
+    q = np.quaternion(w, x, y, z).normalized()
+    R = quaternion.as_rotation_matrix(q)  # shape (3,3)
+
+    T = np.eye(4, dtype=float)
+    T[:3, :3] = R
+    T[:3, 3] = t
+    return T
 
 class AddGaussianNoise(torch.nn.Module):
     def __init__(self, mu, sigma):
@@ -416,7 +442,8 @@ class RVWithImageDataset(Dataset):
         rv_sample = self.loader(rv_path)
         low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
-
+        
+        lidar2ego_mat = tf_mat_sensor_to_ego(sample_info['lidar_info']['calibrated_sensor'])
             
         image_list = self.get_image(sample_info['cam_infos'], self.cam_names)
         (
@@ -441,6 +468,7 @@ class RVWithImageDataset(Dataset):
             img_metas,
             low_res_rv,
             high_res_rv,
+            lidar2ego_mat,
         ]
 
         return ret_list
@@ -456,7 +484,7 @@ def collate_fn(data):
     img_metas_batch = list()
     lr_rv_samples_batch = list()
     hr_rv_samples_batch = list()
-    
+    lidar2ego_mat = None
     for iter_data in data:
         (
             sweep_imgs,
@@ -469,7 +497,11 @@ def collate_fn(data):
             img_metas,
             lr_rv_sample,
             hr_rv_sample,
+            lidar2ego_mat_tmp,
         ) = iter_data[:11]
+        
+        if lidar2ego_mat is None:
+            lidar2ego_mat = lidar2ego_mat_tmp
         
         imgs_batch.append(sweep_imgs)
         sensor2ego_mats_batch.append(sweep_sensor2ego_mats)
@@ -481,6 +513,7 @@ def collate_fn(data):
         img_metas_batch.append(img_metas)
         lr_rv_samples_batch.append(lr_rv_sample)
         hr_rv_samples_batch.append(hr_rv_sample)
+        
     mats_dict = dict()
     mats_dict['sensor2ego_mats'] = torch.stack(sensor2ego_mats_batch)
     mats_dict['intrin_mats'] = torch.stack(intrin_mats_batch)
@@ -494,6 +527,7 @@ def collate_fn(data):
         img_metas_batch,
         torch.stack(lr_rv_samples_batch),
         torch.stack(hr_rv_samples_batch),
+        torch.from_numpy(lidar2ego_mat).float(),
     ]
 
     return ret_list

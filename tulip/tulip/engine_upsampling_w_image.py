@@ -76,17 +76,19 @@ def train_one_epoch(model: torch.nn.Module,
         img_metas = data[3]
         samples_low_res = data[4]
         samples_high_res = data[5]
+        lidar2ego_mat = data[6]
         
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
         samples_low_res = samples_low_res.to(device, non_blocking=True)
         samples_high_res = samples_high_res.to(device, non_blocking=True)
+        lidar2ego_mat = lidar2ego_mat.to(device, non_blocking=True)
 
 
         with torch.cuda.amp.autocast():
             _, total_loss, pixel_loss = model(samples_low_res, cam_imgs, 
-                                              mats_dict, timestamps, samples_high_res)
+                                              mats_dict, timestamps, samples_high_res, lidar2ego_mat)
 
         total_loss_value = total_loss.item()
         pixel_loss_value = pixel_loss.item()

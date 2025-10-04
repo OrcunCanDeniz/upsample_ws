@@ -141,7 +141,7 @@ class CMTULIP(TULIP):
             return False
 
 
-    def forward(self, x, in_imgs, mats_dict, timestamps, target, mc_drop = False):
+    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
         bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
             
         x = self.patch_embed(x) 
@@ -150,9 +150,10 @@ class CMTULIP(TULIP):
         for i, layer in enumerate(self.layers):
             x_save.append(x)
             x = layer(x)
-            
+
         x = self.first_patch_expanding(x)
-        x = self.frust_attn(x, bev_feat)
+        x = self.frust_attn(x, bev_feat, lidar2ego_mat)
+        
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
             x = self.skip_connection_layers[i](x)
