@@ -181,12 +181,14 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
         img_metas = batch[3]
         images_low_res = batch[4]
         images_high_res = batch[5]
+        lidar2ego_mat = batch[6]
         
         images_low_res = images_low_res.to(device, non_blocking=True)
         images_high_res = images_high_res.to(device, non_blocking=True)
         cam_imgs = cam_imgs.to(device, non_blocking=True)
         mats_dict = {k: v.to(device, non_blocking=True) for k, v in mats_dict.items()}
         timestamps = timestamps.to(device, non_blocking=True)
+        lidar2ego_mat = lidar2ego_mat.to(device, non_blocking=True)
         
         global_step += 1
         # compute output
@@ -197,11 +199,17 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             for i in range(int(np.ceil(iteration / iteration_batch))):
                 input_batch = iteration_batch if (iteration-i*iteration_batch) > iteration_batch else (iteration-i*iteration_batch)
                 test_imgs_input = torch.tile(images_low_res, (input_batch, 1, 1, 1))
-                
-
-                pred_imgs = model(test_imgs_input, cam_imgs, 
-                                mats_dict, timestamps,
+                lidar2ego_mat_batch = torch.tile(lidar2ego_mat, (input_batch, 1, 1))
+                cam_imgs_batch = torch.tile(cam_imgs, (input_batch, 1, 1, 1, 1, 1))
+                mats_dict_batch = {}
+                for k, v in mats_dict.items():
+                    if v.shape[0] == 1 and v.ndim >= 2:
+                        mats_dict_batch[k] = v.repeat(input_batch, *([1] * (v.ndim - 1)))
+                # print all input tensors shapes
+                pred_imgs = model(test_imgs_input, cam_imgs_batch, 
+                                mats_dict_batch, timestamps,
                                 target=images_high_res, 
+                                lidar2ego_mat=lidar2ego_mat_batch,
                                 mc_drop = True) 
                 
                 pred_img_iteration[i*iteration_batch:i*iteration_batch+input_batch, ...] = pred_imgs

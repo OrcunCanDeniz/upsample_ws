@@ -99,9 +99,11 @@ class RV2BEVFrustumAttn(nn.Module):
             bev (_type_): [B, Cb, Hbev, Wbev]
             lidar2ego_mat (_type_): [1, 4, 4]
         """
-        
         B, Hrv, Wrv, Crv = x_rv.shape
         B2, Cb, Hbev, Wbev = bev.shape
+        if B < B2: # handle this inside bev feature extractor bevdepth/base_lss_fpn.py, it happens because of cacheing the batched geometries
+            bev = bev[:B, ...]
+            B2, Cb, Hbev, Wbev = bev.shape
         assert B == B2
         x_rv = x_rv.permute(0, 3, 1, 2).contiguous()
         # Azimuth & Coord
