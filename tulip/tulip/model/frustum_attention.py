@@ -19,7 +19,7 @@ ELEV_DEG_PER_RING_NUCSENES = np.array([-30.67, -29.33, -28., -26.66, -25.33, -24
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, C_out=128, d=128,
                  rmax=55.0, K=24, c=2.0,
-                 grid_m=0.5, bev_extent=(-50,50,-50,50),
+                 grid_m=0.5, bev_extent=(-55,55,-55,55),
                  gumbel_topk=False, topk=8, lambda_ent=0.0,
                  n_heads=8,    # <-- add: MSDA heads
                  msda_points=6, # <-- num_points per head in MSDA (keep small)
@@ -85,6 +85,10 @@ class RV2BEVFrustumAttn(nn.Module):
         self.register_buffer("u_vec_y", u_vec_y, persistent=False)
         self.register_buffer("u_vec_z", u_vec_z, persistent=False)
         
+        self.jitter_scale = 0.05   # γ: 5% of sigma
+        self.edge_gain    = 4.0    # smooth “clamp” strength for ref coords
+        self.kl_weight    = 1e-4   # tiny KL prior
+        
 
         # ---- NEW: MSDeformAttn (1 level, 2D) ----
         self.msda = MSDA(embed_dims=d,
@@ -118,8 +122,7 @@ class RV2BEVFrustumAttn(nn.Module):
         range_in = torch.cat([x_rv, batch_u_vec], 1)
         mu, log_sigma = torch.chunk(self.range_head(range_in), 2, dim=1)
         mu = torch.sigmoid(mu) * self.rmax
-        log_sigma = log_sigma.clamp(min=-5.0, max=3.0)
-        sigma = log_sigma.exp()                          # [B,1,Hrv,Wrv]
+        sigma = F.softplus(log_sigma).clamp_min(1e-3)                          # [B,1,Hrv,Wrv]
         # mu    = mu.squeeze(1).unsqueeze(1).clamp(0.0, self.rmax)  # [B,1,Hrv,Wrv]
 
         # ---- Build reference points from μ, az ----
@@ -129,11 +132,21 @@ class RV2BEVFrustumAttn(nn.Module):
         el_ = self.elevation.unsqueeze(0).expand(B, -1, -1)  # [B,Hrv,Wrv], LiDAR-frame elevation
 
         mu_ = mu.squeeze(1)  # [B,Hrv,Wrv]
+        sg_ = sigma.squeeze(1)
+        
+        if self.training and self.jitter_scale > 0:
+            eps = torch.randn_like(mu_)                         # ~ N(0,1)
+            # Option A: gradient to σ only (stable early training)
+            mu_used = (mu_.detach() + self.jitter_scale * sg_ * eps)
+            # Option B: gradient to both μ and σ (full reparam) — uncomment to switch
+            # mu_used = (mu_ + self.jitter_scale * sg_ * eps)
+        else:
+            mu_used = mu_
 
         # beam endpoint in LiDAR frame
-        x_l = mu_ * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
-        y_l = mu_ * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
-        z_l = mu_ * self.u_vec_z #torch.sin(el_)
+        x_l = mu_used * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
+        y_l = mu_used * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
+        z_l = mu_used * self.u_vec_z #torch.sin(el_)
 
         ones = torch.ones_like(x_l)
         p_lidar_h = torch.stack([x_l, y_l, z_l, ones], dim=-1)   # [B,Hrv,Wrv,4]
@@ -152,7 +165,9 @@ class RV2BEVFrustumAttn(nn.Module):
         # Normalize to [0,1]
         rx = (x_ego - self.xmin) / (self.xmax - self.xmin)   # [B,Hrv,Wrv]
         ry = (y_ego - self.ymin) / (self.ymax - self.ymin)   # [B,Hrv,Wrv]
-        ref = torch.stack([rx.clamp(0,1), ry.clamp(0,1)], dim=-1)          # [B,Hrv,Wrv,2]
+        rx = torch.sigmoid(self.edge_gain * (rx - 0.5))
+        ry = torch.sigmoid(self.edge_gain * (ry - 0.5))
+        ref = torch.stack([rx, ry], dim=-1)          # [B,Hrv,Wrv,2]
         ref = ref.view(B, Hrv*Wrv, 1, 2)                                   # [B,L,1,2], 1 level
 
         # ---- σ-aware query augmentation ----
@@ -180,7 +195,16 @@ class RV2BEVFrustumAttn(nn.Module):
         y = y_msda.view(B, Hrv, Wrv, self.d).permute(0,3,1,2).contiguous()  # [B,d,Hrv,Wrv]
         y = self.proj_o(y)                                                  # [B,C_out,Hrv,Wrv]
 
-        return y.view(B, Hrv, Wrv, -1)
+        # KL to N(0,1) on normalized μ/rmax and σ
+        mu_norm = mu_ / self.rmax
+        L_kl = 0.5 * (mu_norm**2 + sg_**2 - (sg_**2 + 1e-8).log() - 1.0)
+        aux = {}
+        aux["L_kl_mu_sigma"] = self.kl_weight * L_kl.mean()
+        # aux["mu_mean"] = mu_.mean().detach()
+        # aux["sigma_mean"] = sg_.mean().detach()
+        y = y.view(B, Hrv, Wrv, -1)
+
+        return y, aux
 
 __all__ = ["AngleBinner3D"]
 

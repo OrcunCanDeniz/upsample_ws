@@ -152,7 +152,7 @@ class CMTULIP(TULIP):
             x = layer(x)
 
         x = self.first_patch_expanding(x)
-        x = self.frust_attn(x, bev_feat, lidar2ego_mat)
+        x, aux = self.frust_attn(x, bev_feat, lidar2ego_mat)
         
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
@@ -176,8 +176,23 @@ class CMTULIP(TULIP):
         if mc_drop:
             return x
         else:
-            total_loss, pixel_loss = self.forward_loss(x, target)
+            total_loss, pixel_loss = self.forward_loss(x, target, aux)
             return x, total_loss, pixel_loss
+
+    def forward_loss(self, pred, target, aux=None):
+        
+        loss = (pred - target).abs()
+        loss = loss.mean()
+        
+        if aux is not None:
+            loss += aux["L_kl_mu_sigma"]
+
+        if self.log_transform:
+            pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
+        else:
+            pixel_loss = loss.clone()
+
+        return loss, pixel_loss
 
 def tulip_base(**kwargs):
     model = CMTULIP(
