@@ -18,11 +18,11 @@ ELEV_DEG_PER_RING_NUCSENES = np.array([-30.67, -29.33, -28., -26.66, -25.33, -24
 
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, C_out=128, d=128,
-                 rmax=55.0, K=24, c=2.0,
+                 rmax=55.0, K=5, c=2.0,
                  grid_m=0.5, bev_extent=(-55,55,-55,55),
                  gumbel_topk=False, topk=8, lambda_ent=0.0,
                  n_heads=8,    # <-- add: MSDA heads
-                 msda_points=6, # <-- num_points per head in MSDA (keep small)
+                 msda_points=4, # <-- num_points per head in MSDA (keep small)
                  rv_size=(2,64),
                  vfov=((-30.67,10.67))
                  ):
@@ -46,7 +46,7 @@ class RV2BEVFrustumAttn(nn.Module):
 
         # σ-aware query lift: concat [logσ, 1/σ] to Q, bring back to d
         self.q_sigma = nn.Sequential(
-            nn.Conv2d(d + 2, d, 1, bias=True),
+            nn.Conv2d(d + 6, d, 1, bias=True),
             nn.GELU(),
             nn.Conv2d(d, d, 1, bias=True)
         )
@@ -57,14 +57,20 @@ class RV2BEVFrustumAttn(nn.Module):
             nn.GroupNorm(8, 128), nn.GELU(),
             nn.Conv2d(128, 64, 3, padding=1, padding_mode="circular", bias=False),
             nn.GroupNorm(8, 64), nn.GELU(),
-            nn.Conv2d(64, 2, 1, bias=True) # sigma, mu for depth distribution
+            nn.Conv2d(64, 4, 1, bias=True) # mu_depth, sigma_depth, sigma_elev, sigma_azimuth
         )
 
         # Build azimuth and zenith maps by rv_size (width spans [-pi, pi))
         self.Hrv, self.Wrv = int(rv_size[0]), int(rv_size[1])
         az_line = torch.linspace(-math.pi, math.pi, self.Wrv + 1)[:-1]   # [Wrv]
+        self.az_step = az_line[1] - az_line[0]
+        az_line = az_line + self.az_step / 2
         az = az_line.view(1, 1, 1, self.Wrv).expand(1, 1, self.Hrv, self.Wrv)
+        # elev angles are already bin centers so no need to add half step
         elev = np.array(np.split(ELEV_DEG_PER_RING_NUCSENES[::-1], self.Hrv))
+        el_steps = elev.max(axis=1) - elev.min(axis=1)
+        el_steps = torch.from_numpy(np.deg2rad(el_steps)).float()
+        self.register_buffer("elev_steps", el_steps.repeat(self.Wrv).reshape(self.Hrv, self.Wrv), persistent=False)
         elev = elev.mean(axis=1).repeat(self.Wrv).reshape(self.Hrv, self.Wrv)
         elev = torch.from_numpy(np.deg2rad(elev)).float()
         
@@ -72,32 +78,20 @@ class RV2BEVFrustumAttn(nn.Module):
         self.register_buffer("azimuth", az, persistent=False)
 
         # compute unit vector per range view pixel 
-        cos_az = torch.cos(az)
-        sin_az = torch.sin(az)
-        cos_el = torch.cos(elev)
-        sin_el = torch.sin(elev)
-        u_vec_x = cos_az * cos_el
-        u_vec_y = sin_az * cos_el
-        u_vec_z = sin_el[None, None, :, :]
-        u_vec = torch.cat([u_vec_x, u_vec_y, u_vec_z], dim=1)
-        self.register_buffer("u_vec", u_vec, persistent=False)
-        self.register_buffer("u_vec_x", u_vec_x, persistent=False)
-        self.register_buffer("u_vec_y", u_vec_y, persistent=False)
-        self.register_buffer("u_vec_z", u_vec_z, persistent=False)
+        self.register_buffer("offsets", torch.tensor(np.linspace(-0.6, 0.6, self.K), dtype=torch.float32), persistent=False)
         
         self.jitter_scale = 0.05   # γ: 5% of sigma
         self.edge_gain    = 4.0    # smooth “clamp” strength for ref coords
         self.kl_weight    = 1e-4   # tiny KL prior
         
 
-        # ---- NEW: MSDeformAttn (1 level, 2D) ----
         self.msda = MSDA(embed_dims=d,
                          num_heads=n_heads,
-                         num_levels=1,
+                         num_levels=self.K,
                          num_points=msda_points,
                          batch_first=True)
 
-    def forward(self, x_rv, bev, lidar2ego_mat, temperature=1.0):
+    def forward(self, x_rv, bev, lidar2ego_mat):
         """
             x_rv (_type_): [B, Hrv, Wrv, Crv]
             bev (_type_): [B, Cb, Hbev, Wbev]
@@ -120,9 +114,11 @@ class RV2BEVFrustumAttn(nn.Module):
 
         # Range head -> μ, σ
         range_in = torch.cat([x_rv, batch_u_vec], 1)
-        mu, log_sigma = torch.chunk(self.range_head(range_in), 2, dim=1)
+        mu, sigma_depth, sigma_elev, sigma_azimuth = torch.chunk(self.range_head(range_in), 4, dim=1)
         mu = torch.sigmoid(mu) * self.rmax
-        sigma = F.softplus(log_sigma).clamp_min(1e-3)                          # [B,1,Hrv,Wrv]
+        sigma_depth = F.softplus(sigma_depth) + 1e-3  # [B,1,Hrv,Wrv]
+        sigma_elev = torch.sigmoid(sigma_elev) * self.elev_steps + 1e-3  # [B,1,Hrv,Wrv]
+        sigma_azimuth = torch.sigmoid(sigma_azimuth) * self.az_step + 1e-3  # [B,1,Hrv,Wrv]
         # mu    = mu.squeeze(1).unsqueeze(1).clamp(0.0, self.rmax)  # [B,1,Hrv,Wrv]
 
         # ---- Build reference points from μ, az ----
@@ -132,56 +128,61 @@ class RV2BEVFrustumAttn(nn.Module):
         el_ = self.elevation.unsqueeze(0).expand(B, -1, -1)  # [B,Hrv,Wrv], LiDAR-frame elevation
 
         mu_ = mu.squeeze(1)  # [B,Hrv,Wrv]
-        sg_ = sigma.squeeze(1)
+        sg_depth = sigma_depth.squeeze(1)
+        sg_elev = sigma_elev.squeeze(1)
+        sg_azimuth = sigma_azimuth.squeeze(1)
         
-        if self.training and self.jitter_scale > 0:
-            eps = torch.randn_like(mu_)                         # ~ N(0,1)
-            # Option A: gradient to σ only (stable early training)
-            mu_used = (mu_.detach() + self.jitter_scale * sg_ * eps)
-            # Option B: gradient to both μ and σ (full reparam) — uncomment to switch
-            # mu_used = (mu_ + self.jitter_scale * sg_ * eps)
-        else:
-            mu_used = mu_
+        depth_samples = mu_[...,None] + (sg_depth[...,None] * self.offsets) # [B, Hrv, Wrv, K]
+        elev_samples = el_[...,None] + (sg_elev[...,None] * self.offsets) # [B, Hrv, Wrv, K]
+        azimuth_samples = az_[...,None] + (sg_azimuth[...,None] * self.offsets) # [B, Hrv, Wrv, K]
 
         # beam endpoint in LiDAR frame
-        x_l = mu_used * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
-        y_l = mu_used * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
-        z_l = mu_used * self.u_vec_z #torch.sin(el_)
+        x_l = depth_samples * torch.cos(elev_samples) * torch.cos(azimuth_samples) #[B, Hrv, Wrv, K]
+        y_l = depth_samples * torch.cos(elev_samples) * torch.sin(azimuth_samples)
+        z_l = depth_samples * torch.sin(elev_samples)
 
         ones = torch.ones_like(x_l)
-        p_lidar_h = torch.stack([x_l, y_l, z_l, ones], dim=-1)   # [B,Hrv,Wrv,4]
-        p_lidar_h = p_lidar_h.view(B, Hrv*Wrv, 4)                # [B,L,4]
+        p_lidar_h = torch.stack([x_l.reshape(B, Hrv*Wrv*self.K), 
+                                 y_l.reshape(B, Hrv*Wrv*self.K), 
+                                 z_l.reshape(B, Hrv*Wrv*self.K), 
+                                 ones.reshape(B, Hrv*Wrv*self.K)], dim=-1)   # [B,Hrv*Wrv*self.K,4]
 
         # LiDAR -> Ego
         # lidar2ego_mat is [B,4,4] (or [1,4,4] broadcastable)
         # print dtypes
         p_ego_h = p_lidar_h @ lidar2ego_mat                      # [B,L,4]
-        p_ego_h = p_ego_h.view(B, Hrv, Wrv, 4) # xyzw per latent beam
+        p_ego_h = p_ego_h.view(B, Hrv, Wrv, self.K, 4) # xyzw per latent beam
 
         # splat onto bev plane
         x_ego = p_ego_h[..., 0]
         y_ego = p_ego_h[..., 1]
 
         # Normalize to [0,1]
-        rx = (x_ego - self.xmin) / (self.xmax - self.xmin)   # [B,Hrv,Wrv]
-        ry = (y_ego - self.ymin) / (self.ymax - self.ymin)   # [B,Hrv,Wrv]
+        rx = (x_ego - self.xmin) / (self.xmax - self.xmin)   # [B,Hrv,Wrv,K]
+        ry = (y_ego - self.ymin) / (self.ymax - self.ymin)   # [B,Hrv,Wrv,K]
         rx = torch.sigmoid(self.edge_gain * (rx - 0.5))
         ry = torch.sigmoid(self.edge_gain * (ry - 0.5))
-        ref = torch.stack([rx, ry], dim=-1)          # [B,Hrv,Wrv,2]
-        ref = ref.view(B, Hrv*Wrv, 1, 2)                                   # [B,L,1,2], 1 level
+        ref = torch.stack([rx, ry], dim=-1) # [B,Hrv,Wrv,k,2]
+        ref = ref.view(B, Hrv*Wrv, self.K, 2)     # [B,L,K,2], K level
 
         # ---- σ-aware query augmentation ----
-        sig_feat = torch.cat([log_sigma, (1.0 / (sigma + 1e-6))], dim=1)   # [B,2,Hrv,Wrv]
+        sig_feat = torch.cat([sigma_depth, sigma_elev, sigma_azimuth, 
+                              (1.0 / (sigma_depth + 1e-6)),
+                              (1.0 / (sigma_elev + 1e-6)),
+                              (1.0 / (sigma_azimuth + 1e-6))], dim=1)   # [B,6,Hrv,Wrv]
         Q = self.q_sigma(torch.cat([Q0, sig_feat], dim=1))                 # [B,d,Hrv,Wrv]
 
         # flatten for MSDA
         query = Q.permute(0,2,3,1).reshape(B, Hrv*Wrv, self.d)         
         value = Vmap.flatten(2).transpose(1,2).contiguous()   
+        value = value.repeat(1, self.K, 1)
         original_dtype = query.dtype
         value = value.to(torch.float32) # [B,Hbev*Wbev,d]
         query = query.to(torch.float32)
-        spatial_shapes = torch.as_tensor([[Hbev, Wbev]], device=bev.device, dtype=torch.long)
-        level_start_index = torch.as_tensor([0], device=bev.device, dtype=torch.long)
+        spatial_shapes = torch.as_tensor([[Hbev, Wbev]] * self.K, device=bev.device, dtype=torch.long)
+        level_start_index = torch.as_tensor(
+                                            [i * Hbev * Wbev for i in range(self.K)], device=bev.device, dtype=torch.long
+                                        )
 
         # without disabling autocasts, amp casts tensors to half which msda does not support
         with torch.cuda.amp.autocast(enabled=False):
@@ -195,17 +196,21 @@ class RV2BEVFrustumAttn(nn.Module):
         y = y_msda.view(B, Hrv, Wrv, self.d).permute(0,3,1,2).contiguous()  # [B,d,Hrv,Wrv]
         y = self.proj_o(y)                                                  # [B,C_out,Hrv,Wrv]
 
-        # KL to N(0,1) on normalized μ/rmax and σ
-        mu_norm = mu_ / self.rmax
-        L_kl = 0.5 * (mu_norm**2 + sg_**2 - (sg_**2 + 1e-8).log() - 1.0)
+        mu_norm = mu / self.rmax
+        sigma_r = sigma_depth.clamp_min(1e-6)
+        sigma_az = sigma_azimuth / self.az_step      # make dimensionless
+        sigma_el = sigma_elev / self.elev_steps      # make dimensionless
+
+        L_kl_r  = 0.5 * (mu_norm.pow(2) + sigma_r.pow(2) - sigma_r.pow(2).log() - 1.0)
+        L_kl_az = 0.5 * (sigma_az.pow(2) - sigma_az.pow(2).log() - 1.0)
+        L_kl_el = 0.5 * (sigma_el.pow(2) - sigma_el.pow(2).log() - 1.0)
+
+        L_kl = L_kl_r + L_kl_az + L_kl_el
+        
         aux = {}
         aux["L_kl_mu_sigma"] = self.kl_weight * L_kl.mean()
-        # aux["mu_mean"] = mu_.mean().detach()
-        # aux["sigma_mean"] = sg_.mean().detach()
         y = y.view(B, Hrv, Wrv, -1)
 
         return y, aux
-
-__all__ = ["AngleBinner3D"]
 
 
