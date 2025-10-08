@@ -64,6 +64,8 @@ class RV2BEVFrustumAttn(nn.Module):
         self.Hrv, self.Wrv = int(rv_size[0]), int(rv_size[1])
         az_line = torch.linspace(-math.pi, math.pi, self.Wrv + 1)[:-1]   # [Wrv]
         az = az_line.view(1, 1, 1, self.Wrv).expand(1, 1, self.Hrv, self.Wrv)
+        az_step = az_line[1] - az_line[0]
+        az = az + 0.5 * az_step   # center of each bin
         elev = np.array(np.split(ELEV_DEG_PER_RING_NUCSENES[::-1], self.Hrv))
         elev = elev.mean(axis=1).repeat(self.Wrv).reshape(self.Hrv, self.Wrv)
         elev = torch.from_numpy(np.deg2rad(elev)).float()
