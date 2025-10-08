@@ -120,9 +120,9 @@ class RV2BEVFrustumAttn(nn.Module):
 
         # Range head -> μ, σ
         range_in = torch.cat([x_rv, batch_u_vec], 1)
-        mu, log_sigma = torch.chunk(self.range_head(range_in), 2, dim=1)
-        mu = torch.sigmoid(mu) * self.rmax
-        sigma = F.softplus(log_sigma).clamp_min(1e-3)                          # [B,1,Hrv,Wrv]
+        mu_raw, sigma_raw = torch.chunk(self.range_head(range_in), 2, dim=1)
+        mu = torch.sigmoid(mu_raw) * self.rmax
+        sigma = F.relu(sigma_raw).clamp_min(1e-3) * self.rmax                        # [B,1,Hrv,Wrv]
         # mu    = mu.squeeze(1).unsqueeze(1).clamp(0.0, self.rmax)  # [B,1,Hrv,Wrv]
 
         # ---- Build reference points from μ, az ----
@@ -131,18 +131,10 @@ class RV2BEVFrustumAttn(nn.Module):
         az_ = batch_az.squeeze(1)  # [B,Hrv,Wrv], LiDAR-frame azimuth (radians)
         el_ = self.elevation.unsqueeze(0).expand(B, -1, -1)  # [B,Hrv,Wrv], LiDAR-frame elevation
 
-        mu_ = mu.squeeze(1)  # [B,Hrv,Wrv]
-        sg_ = sigma.squeeze(1)
-        
-        if self.training and self.jitter_scale > 0:
-            eps = torch.randn_like(mu_)                         # ~ N(0,1)
-            # Option A: gradient to σ only (stable early training)
-            mu_used = (mu_.detach() + self.jitter_scale * sg_ * eps)
-            # Option B: gradient to both μ and σ (full reparam) — uncomment to switch
-            # mu_used = (mu_ + self.jitter_scale * sg_ * eps)
-        else:
-            mu_used = mu_
+        mu_used = mu.squeeze(1)  # [B,Hrv,Wrv]
+        # sg_ = sigma.squeeze(1)
 
+        # mu_used = mu_
         # beam endpoint in LiDAR frame
         x_l = mu_used * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
         y_l = mu_used * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
@@ -171,7 +163,7 @@ class RV2BEVFrustumAttn(nn.Module):
         ref = ref.view(B, Hrv*Wrv, 1, 2)                                   # [B,L,1,2], 1 level
 
         # ---- σ-aware query augmentation ----
-        sig_feat = torch.cat([log_sigma, (1.0 / (sigma + 1e-6))], dim=1)   # [B,2,Hrv,Wrv]
+        sig_feat = torch.cat([sigma, (1.0 / (sigma + 1e-6))], dim=1)   # [B,2,Hrv,Wrv]
         Q = self.q_sigma(torch.cat([Q0, sig_feat], dim=1))                 # [B,d,Hrv,Wrv]
 
         # flatten for MSDA
@@ -196,15 +188,15 @@ class RV2BEVFrustumAttn(nn.Module):
         y = self.proj_o(y)                                                  # [B,C_out,Hrv,Wrv]
 
         # KL to N(0,1) on normalized μ/rmax and σ
-        mu_norm = mu_ / self.rmax
-        L_kl = 0.5 * (mu_norm**2 + sg_**2 - (sg_**2 + 1e-8).log() - 1.0)
-        aux = {}
-        aux["L_kl_mu_sigma"] = self.kl_weight * L_kl.mean()
+        # mu_norm = mu_ / self.rmax
+        # L_kl = 0.5 * (mu_norm**2 + sg_**2 - (sg_**2 + 1e-8).log() - 1.0)
+        aux = None
+        # aux["L_kl_mu_sigma"] = self.kl_weight * L_kl.mean()
         # aux["mu_mean"] = mu_.mean().detach()
         # aux["sigma_mean"] = sg_.mean().detach()
         y = y.view(B, Hrv, Wrv, -1)
 
-        return y, aux
+        return y, aux, (mu/self.rmax, sigma)
 
 __all__ = ["AngleBinner3D"]
 

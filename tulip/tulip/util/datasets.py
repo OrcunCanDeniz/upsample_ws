@@ -23,6 +23,7 @@ from pyquaternion import Quaternion
 import mmcv
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from PIL import Image
+from skimage.measure import block_reduce
 
 from timm.data import create_transform
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
@@ -179,6 +180,17 @@ class FilterInvalidPixels(object):
 
     def __call__(self, tensor):
         return torch.where((tensor >= self.min_range) & (tensor <= self.max_range), tensor, 0)
+    
+class FilterInvalidPixelsWMask(object):
+    ''''Filter out pixels that are out of lidar range'''
+    def __init__(self, min_range, max_range = 1):
+        self.max_range = max_range
+        self.min_range = min_range
+
+    def __call__(self, rv, mask):
+        range_mask = (rv >= self.min_range) & (rv <= self.max_range)
+        mask = mask & range_mask
+        return torch.where(range_mask, rv, 0), mask
 
 
 class PairDataset(torch.utils.data.Dataset):
@@ -208,6 +220,11 @@ def npy_loader(path: str) -> np.ndarray:
         range_intensity_map = np.load(f)
         range_map = range_intensity_map[..., 0]
     return range_map.astype(np.float32)
+
+def mdim_npy_loader(path: str) -> np.ndarray:
+    with open(path, "rb") as f:
+        data = np.load(f)
+    return data.astype(np.float32)
     
 def rimg_loader(path: str) -> np.ndarray:
     """
@@ -230,7 +247,7 @@ class RVWithImageDataset(Dataset):
         root: str,
         high_res_transform: Optional[Callable] = None,
         low_res_transform: Optional[Callable] = None,
-        loader: Callable[[str], Any] = npy_loader,
+        loader: Callable[[str], Any] = mdim_npy_loader,
         img_conf = dict(img_mean=[123.675, 116.28, 103.53],
                         img_std=[58.395, 57.12, 57.375],
                         to_rgb=True),
@@ -257,7 +274,26 @@ class RVWithImageDataset(Dataset):
         self.img_std = np.array(img_conf['img_std'], np.float32)
         self.to_rgb = img_conf.get('to_rgb', True)
         self.final_dim = final_dim
-            
+        self.max_range = 55
+        self.min_range = 0
+        self.depth_target_size = (2,64)
+        
+    def create_depth_target(self, rv, valid_mask):
+        assert rv.shape[0] >= self.depth_target_size[0]
+        assert rv.shape[1] >= self.depth_target_size[1]
+        
+        ds_factor_h = rv.shape[0] // self.depth_target_size[0]
+        ds_factor_w = rv.shape[1] // self.depth_target_size[1]
+        rv = rv.astype(np.float32)
+        rv[~valid_mask] = np.nan
+        rv_norm = rv / self.max_range # 0,1 -> 0,max_range
+        latent_depth_mean = block_reduce(rv_norm, (ds_factor_h, ds_factor_w), func=np.nanmean)
+        isnan = np.isnan(latent_depth_mean)
+        latent_depth_mean[isnan] = 0
+        latent_depth_std = block_reduce(rv_norm, (ds_factor_h, ds_factor_w), func=np.nanstd)
+        range_head_target = np.stack([latent_depth_mean, latent_depth_std])
+        return range_head_target
+             
     def img_transform(self, img):
         W, H = img.size
         fH, fW = self.final_dim
@@ -439,7 +475,12 @@ class RVWithImageDataset(Dataset):
         """
         sample_info = self.infos[index]
         rv_path = os.path.join(self.data_root, sample_info['lidar_info']['rv_path'])
-        rv_sample = self.loader(rv_path)
+        np_data = self.loader(rv_path)
+        rv_sample = np_data[..., 0]
+        mask_sample = np_data[..., -1]
+        range_mask = np.logical_and(rv_sample >= self.min_range, rv_sample <= self.max_range)
+        mask_sample = np.logical_and(mask_sample, range_mask) # pixel should satisfy both range and mask
+        range_head_target = self.create_depth_target(rv_sample, mask_sample)
         low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
         
@@ -469,6 +510,8 @@ class RVWithImageDataset(Dataset):
             low_res_rv,
             high_res_rv,
             lidar2ego_mat,
+            torch.from_numpy(mask_sample),
+            torch.from_numpy(range_head_target)
         ]
 
         return ret_list
@@ -485,6 +528,8 @@ def collate_fn(data):
     lr_rv_samples_batch = list()
     hr_rv_samples_batch = list()
     lidar2ego_mat = None
+    mask_samples_batch = list()
+    range_head_targets_batch = list()
     for iter_data in data:
         (
             sweep_imgs,
@@ -498,7 +543,9 @@ def collate_fn(data):
             lr_rv_sample,
             hr_rv_sample,
             lidar2ego_mat_tmp,
-        ) = iter_data[:11]
+            mask_sample,
+            range_head_target
+        ) = iter_data[:13]
         
         if lidar2ego_mat is None:
             lidar2ego_mat = lidar2ego_mat_tmp
@@ -513,7 +560,8 @@ def collate_fn(data):
         img_metas_batch.append(img_metas)
         lr_rv_samples_batch.append(lr_rv_sample)
         hr_rv_samples_batch.append(hr_rv_sample)
-        
+        mask_samples_batch.append(mask_sample)
+        range_head_targets_batch.append(range_head_target)
     mats_dict = dict()
     mats_dict['sensor2ego_mats'] = torch.stack(sensor2ego_mats_batch)
     mats_dict['intrin_mats'] = torch.stack(intrin_mats_batch)
@@ -528,6 +576,8 @@ def collate_fn(data):
         torch.stack(lr_rv_samples_batch),
         torch.stack(hr_rv_samples_batch),
         torch.from_numpy(lidar2ego_mat).float(),
+        torch.stack(mask_samples_batch),
+        torch.stack(range_head_targets_batch)
     ]
 
     return ret_list
@@ -631,7 +681,7 @@ def build_nuscenes_w_image_upsampling_dataset(is_train, log_transform = False):
     info_file = "nuscenes_upsample_infos_train.pkl" if is_train else "nuscenes_upsample_infos_val.pkl"
 
     nusc_root = "./data/nuscenes"
-    dset = RVWithImageDataset(nusc_root, high_res_transform = transform_high_res, low_res_transform = transform_low_res, loader = npy_loader, info_file = info_file)
+    dset = RVWithImageDataset(nusc_root, high_res_transform = transform_high_res, low_res_transform = transform_low_res, info_file = info_file)
 
     return dset
 

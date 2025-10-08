@@ -64,6 +64,7 @@ class CMTULIP(TULIP):
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
 
         self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, C_out=384)
+        self.range_head_weight = 0.1
     
     def load_lss_weights(self, lss_weights_path, strict=False):
         """
@@ -141,7 +142,7 @@ class CMTULIP(TULIP):
             return False
 
 
-    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
+    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, range_head_target, mc_drop = False):
         bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
             
         x = self.patch_embed(x) 
@@ -152,7 +153,7 @@ class CMTULIP(TULIP):
             x = layer(x)
 
         x = self.first_patch_expanding(x)
-        x, aux = self.frust_attn(x, bev_feat, lidar2ego_mat)
+        x, aux, rh_preds = self.frust_attn(x, bev_feat, lidar2ego_mat)
         
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
@@ -176,14 +177,37 @@ class CMTULIP(TULIP):
         if mc_drop:
             return x
         else:
-            total_loss, pixel_loss = self.forward_loss(x, target, aux)
-            return x, total_loss, pixel_loss
+            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, range_head_target, rh_preds, aux)
+            return x, total_loss, pixel_loss, range_head_loss
 
-    def forward_loss(self, pred, target, aux=None):
+    def forward_loss(self, pred, target, range_head_target, rh_preds, aux=None):
         
         loss = (pred - target).abs()
         loss = loss.mean()
         
+        mu_pred, sigma_pred = rh_preds
+        mu_pred = mu_pred.squeeze(1)
+        sigma_pred = sigma_pred.squeeze(1)
+
+        # mu and sigma both in range [0, 1]
+        mu_tgt  = range_head_target[:, 0, ...] 
+        sigma_tgt = range_head_target[:, 1, ...]
+
+        # Mask invalid targets if any
+        finite_mu = torch.isfinite(mu_tgt)
+        finite_sigma = torch.isfinite(sigma_tgt)
+        mu_pred = mu_pred[finite_mu]
+        sigma_pred = sigma_pred[finite_sigma]
+        mu_tgt = mu_tgt[finite_mu]
+        sigma_tgt = sigma_tgt[finite_sigma]
+
+        # L2 losses
+        mu_loss = F.mse_loss(mu_pred, mu_tgt)
+        sigma_loss = F.mse_loss(sigma_pred, sigma_tgt)
+
+        L_main = mu_loss + 0.5 * sigma_loss   # weight std weaker, optional
+        loss += self.range_head_weight * L_main
+
         if aux is not None:
             loss += aux["L_kl_mu_sigma"]
 
@@ -192,7 +216,7 @@ class CMTULIP(TULIP):
         else:
             pixel_loss = loss.clone()
 
-        return loss, pixel_loss
+        return loss, pixel_loss, L_main
 
 def tulip_base(**kwargs):
     model = CMTULIP(
