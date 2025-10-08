@@ -83,7 +83,7 @@ RUN conda activate py38 && \
     python -m pip install "pip<24.1" && \
     pip install numpy==1.23.5 llvmlite==0.39.1 numba==0.56.4 \
                 pytorch-lightning==1.6.5 "pillow<10.0.0" open3d \
-                git+https://github.com/otaheri/chamfer_distance 
+                git+https://github.com/otaheri/chamfer_distance numpy-quaternion
     
 
 # Working directory
