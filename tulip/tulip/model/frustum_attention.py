@@ -18,7 +18,7 @@ ELEV_DEG_PER_RING_NUCSENES = np.array([-30.67, -29.33, -28., -26.66, -25.33, -24
 
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, C_out=128, d=128,
-                 rmax=55.0, K=24, c=2.0,
+                 rmax=55.0, K=5, c=2.0,
                  grid_m=0.5, bev_extent=(-55,55,-55,55),
                  gumbel_topk=False, topk=8, lambda_ent=0.0,
                  n_heads=8,    # <-- add: MSDA heads
@@ -46,20 +46,21 @@ class RV2BEVFrustumAttn(nn.Module):
 
         # σ-aware query lift: concat [logσ, 1/σ] to Q, bring back to d
         self.q_sigma = nn.Sequential(
-            nn.Conv2d(d + 2, d, 1, bias=True),
+            nn.Conv2d(d + 1, d, 1, bias=True),
             nn.GELU(),
             nn.Conv2d(d, d, 1, bias=True)
         )
 
         # Light range proposal head 
+        self.n_bins = 55
+        self.bin_size = 0.5
         self.range_head = nn.Sequential(
             nn.Conv2d(C_rv + 3, 128, 1, bias=True),
             nn.GroupNorm(8, 128), nn.GELU(),
             nn.Conv2d(128, 64, 3, padding=1, padding_mode="circular", bias=False),
             nn.GroupNorm(8, 64), nn.GELU(),
-            nn.Conv2d(64, 2, 1, bias=True) # sigma, mu for depth distribution
+            nn.Conv2d(64, self.n_bins*2, 1, bias=True) # sigma, mu for depth distribution
         )
-
         # Build azimuth and zenith maps by rv_size (width spans [-pi, pi))
         self.Hrv, self.Wrv = int(rv_size[0]), int(rv_size[1])
         az_line = torch.linspace(-math.pi, math.pi, self.Wrv + 1)[:-1]   # [Wrv]
@@ -122,35 +123,29 @@ class RV2BEVFrustumAttn(nn.Module):
 
         # Range head -> μ, σ
         range_in = torch.cat([x_rv, batch_u_vec], 1)
-        mu_raw, sigma_raw = torch.chunk(self.range_head(range_in), 2, dim=1)
-        mu = torch.sigmoid(mu_raw) * self.rmax
-        sigma = F.relu(sigma_raw).clamp_min(1e-3) * self.rmax                        # [B,1,Hrv,Wrv]
-        # mu    = mu.squeeze(1).unsqueeze(1).clamp(0.0, self.rmax)  # [B,1,Hrv,Wrv]
+        depth_logits = self.range_head(range_in)
+        depth_dist = F.softmax(depth_logits, dim=1)
+        topk_prob, topk_idx = torch.topk(depth_dist, k=self.K, dim=1)   # [B,K,Hrv,Wrv]
+        # Gather bin centers
+        # bin_centers: [1,n_bins,1,1] -> expand along H,W
+        topk_depths = 0.5 + topk_idx * 0.5   # [B,K,Hrv,Wrv]
 
-        # ---- Build reference points from μ, az ----
-        # μ along ray to (x,y,z) in meters (real world position)
-        # Build reference points from μ, az, elevation
-        az_ = batch_az.squeeze(1)  # [B,Hrv,Wrv], LiDAR-frame azimuth (radians)
-        el_ = self.elevation.unsqueeze(0).expand(B, -1, -1)  # [B,Hrv,Wrv], LiDAR-frame elevation
-
-        mu_used = mu.squeeze(1)  # [B,Hrv,Wrv]
-        # sg_ = sigma.squeeze(1)
 
         # mu_used = mu_
         # beam endpoint in LiDAR frame
-        x_l = mu_used * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
-        y_l = mu_used * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
-        z_l = mu_used * self.u_vec_z #torch.sin(el_)
+        x_l = topk_depths * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
+        y_l = topk_depths * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
+        z_l = topk_depths * self.u_vec_z #torch.sin(el_)
 
         ones = torch.ones_like(x_l)
         p_lidar_h = torch.stack([x_l, y_l, z_l, ones], dim=-1)   # [B,Hrv,Wrv,4]
-        p_lidar_h = p_lidar_h.view(B, Hrv*Wrv, 4)                # [B,L,4]
+        p_lidar_h = p_lidar_h.view(B, self.K*Hrv*Wrv, 4)                # [B,L,4]
 
         # LiDAR -> Ego
         # lidar2ego_mat is [B,4,4] (or [1,4,4] broadcastable)
         # print dtypes
         p_ego_h = p_lidar_h @ lidar2ego_mat                      # [B,L,4]
-        p_ego_h = p_ego_h.view(B, Hrv, Wrv, 4) # xyzw per latent beam
+        p_ego_h = p_ego_h.view(B, self.K, Hrv, Wrv, 4) # xyzw per latent beam
 
         # splat onto bev plane
         x_ego = p_ego_h[..., 0]
@@ -162,15 +157,21 @@ class RV2BEVFrustumAttn(nn.Module):
         rx = torch.sigmoid(self.edge_gain * (rx - 0.5))
         ry = torch.sigmoid(self.edge_gain * (ry - 0.5))
         ref = torch.stack([rx, ry], dim=-1)          # [B,Hrv,Wrv,2]
-        ref = ref.view(B, Hrv*Wrv, 1, 2)                                   # [B,L,1,2], 1 level
+        ref = ref.view(B, self.K*Hrv*Wrv, 1, 2)                                   # [B,L,1,2], 1 level
 
         # ---- σ-aware query augmentation ----
-        sig_feat = torch.cat([sigma, (1.0 / (sigma + 1e-6))], dim=1)   # [B,2,Hrv,Wrv]
-        Q = self.q_sigma(torch.cat([Q0, sig_feat], dim=1))                 # [B,d,Hrv,Wrv]
+        Q_tiled = Q0.unsqueeze(1).repeat(1, self.K, 1, 1, 1)        # [B,K,d,H,W]
+        depth_norm = (topk_depths / self.rmax).unsqueeze(2)         # [B,K,1,H,W]
+        Q_depth = torch.cat([Q_tiled, depth_norm], dim=2)           # [B,K,d+1,H,W]
+        Q_depth = Q_depth.view(B*self.K, self.d+1, Hrv, Wrv)
+        Q_depth = self.q_sigma(Q_depth)               
+        prob_scale = torch.sqrt(topk_prob + 1e-8).view(B*self.K, 1, Hrv, Wrv)
+        Q_depth = Q_depth * prob_scale
 
+        # Flatten to (B, L*K, d)
+        query = Q_depth.permute(0,2,3,1).reshape(B, self.K*Hrv*Wrv, self.d)  # [B,L*K,d]
+        value = Vmap.flatten(2).transpose(1,2).contiguous()    
         # flatten for MSDA
-        query = Q.permute(0,2,3,1).reshape(B, Hrv*Wrv, self.d)         
-        value = Vmap.flatten(2).transpose(1,2).contiguous()   
         original_dtype = query.dtype
         value = value.to(torch.float32) # [B,Hbev*Wbev,d]
         query = query.to(torch.float32)
@@ -185,20 +186,14 @@ class RV2BEVFrustumAttn(nn.Module):
                                 spatial_shapes=spatial_shapes,
                                 level_start_index=level_start_index,
                                 key_padding_mask=None)
-        y_msda = y_msda.to(original_dtype)
-        y = y_msda.view(B, Hrv, Wrv, self.d).permute(0,3,1,2).contiguous()  # [B,d,Hrv,Wrv]
+        y_msda = y_msda.view(B, self.K, Hrv, Wrv, self.d) 
+        w = topk_prob / (topk_prob.sum(dim=1, keepdim=True) + 1e-8)  # [B,K,H,W]
+        y = (y_msda * w.unsqueeze(-1)).sum(dim=1)               # [B,H,W,d]
+        y = y.permute(0,3,1,2).contiguous()     
         y = self.proj_o(y)                                                  # [B,C_out,Hrv,Wrv]
+        y = y.permute(0,2,3,1).contiguous()
 
-        # KL to N(0,1) on normalized μ/rmax and σ
-        # mu_norm = mu_ / self.rmax
-        # L_kl = 0.5 * (mu_norm**2 + sg_**2 - (sg_**2 + 1e-8).log() - 1.0)
-        aux = None
-        # aux["L_kl_mu_sigma"] = self.kl_weight * L_kl.mean()
-        # aux["mu_mean"] = mu_.mean().detach()
-        # aux["sigma_mean"] = sg_.mean().detach()
-        y = y.view(B, Hrv, Wrv, -1)
-
-        return y, aux, (mu/self.rmax, sigma)
+        return y, depth_logits, None
 
 __all__ = ["AngleBinner3D"]
 

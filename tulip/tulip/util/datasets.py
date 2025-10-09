@@ -469,7 +469,7 @@ class RVWithImageDataset(Dataset):
         if head_target_rel is None:
             raise KeyError('range_head_target_path missing in lidar_info')
         head_target_path = os.path.join(self.data_root, head_target_rel)
-        range_head_target = mdim_npy_loader(head_target_path)
+        range_head_target = mdim_npy_loader(head_target_path)[0]
         low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
         
@@ -653,8 +653,8 @@ def build_nuscenes_w_image_upsampling_dataset(is_train, log_transform = False):
     input_size = (8,1024)
     output_size = (32,1024)
     
-    t_low_res = [transforms.ToTensor(), ScaleTensor(1/80), FilterInvalidPixels(min_range = 0, max_range = 55/80)]
-    t_high_res = [transforms.ToTensor(), ScaleTensor(1/80), FilterInvalidPixels(min_range = 0, max_range = 55/80)]
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/55)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/55)]
 
     t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0],))
     if output_size[1] // input_size[1] > 1:
