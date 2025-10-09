@@ -23,7 +23,6 @@ from pyquaternion import Quaternion
 import mmcv
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from PIL import Image
-from skimage.measure import block_reduce
 
 from timm.data import create_transform
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
@@ -278,21 +277,6 @@ class RVWithImageDataset(Dataset):
         self.min_range = 0
         self.depth_target_size = (2,64)
         
-    def create_depth_target(self, rv, valid_mask):
-        assert rv.shape[0] >= self.depth_target_size[0]
-        assert rv.shape[1] >= self.depth_target_size[1]
-        
-        ds_factor_h = rv.shape[0] // self.depth_target_size[0]
-        ds_factor_w = rv.shape[1] // self.depth_target_size[1]
-        rv = rv.astype(np.float32)
-        rv[~valid_mask] = np.nan
-        rv_norm = rv / self.max_range # 0,1 -> 0,max_range
-        latent_depth_mean = block_reduce(rv_norm, (ds_factor_h, ds_factor_w), func=np.nanmean)
-        isnan = np.isnan(latent_depth_mean)
-        latent_depth_mean[isnan] = 0
-        latent_depth_std = block_reduce(rv_norm, (ds_factor_h, ds_factor_w), func=np.nanstd)
-        range_head_target = np.stack([latent_depth_mean, latent_depth_std])
-        return range_head_target
              
     def img_transform(self, img):
         W, H = img.size
@@ -480,7 +464,12 @@ class RVWithImageDataset(Dataset):
         mask_sample = np_data[..., -1]
         range_mask = np.logical_and(rv_sample >= self.min_range, rv_sample <= self.max_range)
         mask_sample = np.logical_and(mask_sample, range_mask) # pixel should satisfy both range and mask
-        range_head_target = self.create_depth_target(rv_sample, mask_sample)
+        # Load precomputed range_head_target from disk instead of computing on-the-fly
+        head_target_rel = sample_info['lidar_info'].get('range_head_target_path')
+        if head_target_rel is None:
+            raise KeyError('range_head_target_path missing in lidar_info')
+        head_target_path = os.path.join(self.data_root, head_target_rel)
+        range_head_target = mdim_npy_loader(head_target_path)
         low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
         

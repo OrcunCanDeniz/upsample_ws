@@ -5,16 +5,33 @@ from nuscenes.nuscenes import NuScenes
 from nuscenes.utils import splits
 from sample_nuscenes_dataset import NuScenesPointCloudToRangeImage
 from tqdm import tqdm
+from skimage.measure import block_reduce
 import pdb
+
+def create_depth_target(rv, valid_mask):
+    ds_factor_h = rv.shape[0] // 2
+    ds_factor_w = rv.shape[1] // 64
+    assert rv.shape == valid_mask.shape
+    rv = rv.astype(np.float32)
+    rv[~valid_mask] = np.nan
+    rv_norm = rv / 55 # 0,1 -> 0,max_range
+    latent_depth_mean = block_reduce(rv_norm, (ds_factor_h, ds_factor_w), func=np.nanmean)
+    isnan = np.isnan(latent_depth_mean)
+    latent_depth_mean[isnan] = 0
+    latent_depth_std = block_reduce(rv_norm, (ds_factor_h, ds_factor_w), func=np.nanstd)
+    range_head_target = np.stack([latent_depth_mean, latent_depth_std])
+    return range_head_target
 
 def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lidar_sweeps=1):
     # Create the SPLIT_rv directory in data root
     split_rv_dir = os.path.join(data_root, f'{split_name}_rv')
+    split_head_target_dir = os.path.join(data_root, f'{split_name}_head_target')
     os.makedirs(split_rv_dir, exist_ok=True)
+    os.makedirs(split_head_target_dir, exist_ok=True)
     print(f"Created directory: {split_rv_dir}")
     
     converter = NuScenesPointCloudToRangeImage( min_depth=0.0,
-                                                max_depth=80.0 )
+                                                max_depth=55.0 )
     lidar_name = 'LIDAR_TOP'
     infos = list()
     for cur_scene in tqdm(nusc.scene):
@@ -63,6 +80,10 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
             range_intensity_map = converter(lidar_pts)
             np.save(rv_out_path, range_intensity_map.astype(np.float32))
             
+            range_head_target = create_depth_target(range_intensity_map[...,0], range_intensity_map[..., -1].astype(np.bool))
+            head_target_out_path = os.path.join(split_head_target_dir, rv_out_name.split('/')[-1])
+            np.save(head_target_out_path, range_head_target.astype(np.float32))
+            
             lidar_datas.append(lidar_data)
             sweep_lidar_info = dict()
             sweep_lidar_info['sample_token'] = lidar_data['sample_token']
@@ -73,6 +94,7 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
             sweep_lidar_info['calibrated_sensor'] = nusc.get(
                 'calibrated_sensor', lidar_data['calibrated_sensor_token'])
             sweep_lidar_info['rv_path'] = "/".join(rv_out_path.split('/')[-2:]) # SPLIT_rv/RV.npy
+            sweep_lidar_info['range_head_target_path'] = "/".join(head_target_out_path.split('/')[-2:]) # SPLIT_head_target/head_target.npy
 
             info['cam_infos'] = cam_infos
             info['lidar_info'] = sweep_lidar_info
