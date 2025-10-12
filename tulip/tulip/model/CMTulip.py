@@ -64,7 +64,7 @@ class CMTULIP(TULIP):
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
         self.max_range = 55
         self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, C_out=384)
-        self.range_head_weight = 0.1
+        self.range_head_weight = 0.05
     
     def load_lss_weights(self, lss_weights_path, strict=False):
         """
@@ -184,6 +184,12 @@ class CMTULIP(TULIP):
         # range_head_target is normalized by max_range
         loss = (pred - target).abs()
         loss = loss.mean()
+        
+        if self.log_transform:
+            pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
+        else:
+            pixel_loss = loss.clone()
+        
         valid_mask = ~torch.isnan(range_head_target)
         valid_mask = valid_mask.reshape(-1)
         
@@ -199,18 +205,14 @@ class CMTULIP(TULIP):
         if aux is not None:
             loss += aux["L_kl_mu_sigma"]
 
-        if self.log_transform:
-            pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
-        else:
-            pixel_loss = loss.clone()
-
         return loss, pixel_loss, loss_kl
     
     
     def gaussian_bins_targets(self, gt_depth, bin_size=0.5, rmax=55.0, sigma_bins=1.0):
         # returns soft targets: [B, n_bins, H, W], sum=1 per pixel
         B, H, W = gt_depth.shape
-        gt_depth = gt_depth * rmax
+        gt_depth = (gt_depth * rmax)
+        gt_depth =  torch.clamp(gt_depth, 0, rmax)
         n_bins = int(round(rmax / bin_size))
         centers = (torch.arange(n_bins, device=gt_depth.device, dtype=gt_depth.dtype) + 0.5) * bin_size  # [n_bins]
         # [B, n_bins, H, W]

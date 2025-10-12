@@ -18,9 +18,8 @@ ELEV_DEG_PER_RING_NUCSENES = np.array([-30.67, -29.33, -28., -26.66, -25.33, -24
 
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, C_out=128, d=128,
-                 rmax=55.0, K=5, c=2.0,
-                 grid_m=0.5, bev_extent=(-55,55,-55,55),
-                 gumbel_topk=False, topk=8, lambda_ent=0.0,
+                 rmax=55.0, K=5,
+                 bin_size=0.5, bev_extent=(-55,55,-55,55),
                  n_heads=8,    # <-- add: MSDA heads
                  msda_points=6, # <-- num_points per head in MSDA (keep small)
                  rv_size=(2,64),
@@ -29,13 +28,9 @@ class RV2BEVFrustumAttn(nn.Module):
         super().__init__()
         self.d = d
         self.K = K
-        self.c = float(c)
         self.rmax = float(rmax)
-        self.grid_m = float(grid_m)
+        self.bin_size = float(bin_size)
         self.xmin, self.xmax, self.ymin, self.ymax = bev_extent
-        self.gumbel_topk = gumbel_topk
-        self.topk = topk
-        self.lambda_ent = lambda_ent
         self.n_heads = n_heads
         self.msda_points = msda_points
 
@@ -44,22 +39,21 @@ class RV2BEVFrustumAttn(nn.Module):
         self.proj_v = nn.Conv2d(C_bev, d, 1, bias=True)
         self.proj_o = nn.Conv2d(d, C_out, 1, bias=True)
 
-        # σ-aware query lift: concat [logσ, 1/σ] to Q, bring back to d
-        self.q_sigma = nn.Sequential(
+        # depth-aware query lift: concat [logσ, 1/σ] to Q, bring back to d
+        self.q_depth = nn.Sequential(
             nn.Conv2d(d + 1, d, 1, bias=True),
             nn.GELU(),
             nn.Conv2d(d, d, 1, bias=True)
         )
 
         # Light range proposal head 
-        self.n_bins = 55
-        self.bin_size = 0.5
+        self.n_bins = self.rmax // self.bin_size
         self.range_head = nn.Sequential(
             nn.Conv2d(C_rv + 3, 128, 1, bias=True),
             nn.GroupNorm(8, 128), nn.GELU(),
             nn.Conv2d(128, 64, 3, padding=1, padding_mode="circular", bias=False),
             nn.GroupNorm(8, 64), nn.GELU(),
-            nn.Conv2d(64, self.n_bins*2, 1, bias=True) # sigma, mu for depth distribution
+            nn.Conv2d(64, int(self.n_bins), 1, bias=True) # depth distribution logits
         )
         # Build azimuth and zenith maps by rv_size (width spans [-pi, pi))
         self.Hrv, self.Wrv = int(rv_size[0]), int(rv_size[1])
@@ -88,12 +82,11 @@ class RV2BEVFrustumAttn(nn.Module):
         self.register_buffer("u_vec_y", u_vec_y, persistent=False)
         self.register_buffer("u_vec_z", u_vec_z, persistent=False)
         
-        self.jitter_scale = 0.05   # γ: 5% of sigma
         self.edge_gain    = 4.0    # smooth “clamp” strength for ref coords
         self.kl_weight    = 1e-4   # tiny KL prior
         
 
-        # ---- NEW: MSDeformAttn (1 level, 2D) ----
+        #  deformAttn (1 level, 2D)
         self.msda = MSDA(embed_dims=d,
                          num_heads=n_heads,
                          num_levels=1,
@@ -114,7 +107,6 @@ class RV2BEVFrustumAttn(nn.Module):
         assert B == B2
         x_rv = x_rv.permute(0, 3, 1, 2).contiguous()
         # Azimuth & Coord
-        batch_az = self.azimuth.expand(B, -1, -1, -1)
         batch_u_vec = self.u_vec.expand(B, -1, -1, -1)
 
         # Projections
@@ -128,10 +120,9 @@ class RV2BEVFrustumAttn(nn.Module):
         topk_prob, topk_idx = torch.topk(depth_dist, k=self.K, dim=1)   # [B,K,Hrv,Wrv]
         # Gather bin centers
         # bin_centers: [1,n_bins,1,1] -> expand along H,W
-        topk_depths = 0.5 + topk_idx * 0.5   # [B,K,Hrv,Wrv]
+        topk_depths = self.bin_size * (topk_idx.to(depth_logits.dtype) + 0.5)
+        topk_depths = topk_depths.clamp_max(self.rmax - 0.5 * self.bin_size)
 
-
-        # mu_used = mu_
         # beam endpoint in LiDAR frame
         x_l = topk_depths * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
         y_l = topk_depths * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
@@ -143,7 +134,6 @@ class RV2BEVFrustumAttn(nn.Module):
 
         # LiDAR -> Ego
         # lidar2ego_mat is [B,4,4] (or [1,4,4] broadcastable)
-        # print dtypes
         p_ego_h = p_lidar_h @ lidar2ego_mat                      # [B,L,4]
         p_ego_h = p_ego_h.view(B, self.K, Hrv, Wrv, 4) # xyzw per latent beam
 
@@ -151,22 +141,18 @@ class RV2BEVFrustumAttn(nn.Module):
         x_ego = p_ego_h[..., 0]
         y_ego = p_ego_h[..., 1]
 
-        # Normalize to [0,1]
+        # Normalize to [0,1] linearly
         rx = (x_ego - self.xmin) / (self.xmax - self.xmin)   # [B,Hrv,Wrv]
         ry = (y_ego - self.ymin) / (self.ymax - self.ymin)   # [B,Hrv,Wrv]
-        rx = torch.sigmoid(self.edge_gain * (rx - 0.5))
-        ry = torch.sigmoid(self.edge_gain * (ry - 0.5))
-        ref = torch.stack([rx, ry], dim=-1)          # [B,Hrv,Wrv,2]
-        ref = ref.view(B, self.K*Hrv*Wrv, 1, 2)                                   # [B,L,1,2], 1 level
+        valid_ref = (rx >= 0) & (rx <= 1) & (ry >= 0) & (ry <= 1)
+        ref = torch.stack([rx.clamp(0,1), ry.clamp(0,1)], dim=-1).view(B, self.K*Hrv*Wrv, 1, 2)
 
         # ---- σ-aware query augmentation ----
         Q_tiled = Q0.unsqueeze(1).repeat(1, self.K, 1, 1, 1)        # [B,K,d,H,W]
         depth_norm = (topk_depths / self.rmax).unsqueeze(2)         # [B,K,1,H,W]
         Q_depth = torch.cat([Q_tiled, depth_norm], dim=2)           # [B,K,d+1,H,W]
         Q_depth = Q_depth.view(B*self.K, self.d+1, Hrv, Wrv)
-        Q_depth = self.q_sigma(Q_depth)               
-        prob_scale = torch.sqrt(topk_prob + 1e-8).view(B*self.K, 1, Hrv, Wrv)
-        Q_depth = Q_depth * prob_scale
+        Q_depth = self.q_depth(Q_depth)               
 
         # Flatten to (B, L*K, d)
         query = Q_depth.permute(0,2,3,1).reshape(B, self.K*Hrv*Wrv, self.d)  # [B,L*K,d]
@@ -177,7 +163,6 @@ class RV2BEVFrustumAttn(nn.Module):
         query = query.to(torch.float32)
         spatial_shapes = torch.as_tensor([[Hbev, Wbev]], device=bev.device, dtype=torch.long)
         level_start_index = torch.as_tensor([0], device=bev.device, dtype=torch.long)
-
         # without disabling autocasts, amp casts tensors to half which msda does not support
         with torch.cuda.amp.autocast(enabled=False):
             y_msda = self.msda(query=query,
@@ -194,7 +179,4 @@ class RV2BEVFrustumAttn(nn.Module):
         y = y.permute(0,2,3,1).contiguous()
 
         return y, depth_logits, None
-
-__all__ = ["AngleBinner3D"]
-
 
