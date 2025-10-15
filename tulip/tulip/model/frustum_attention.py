@@ -18,16 +18,15 @@ ELEV_DEG_PER_RING_NUCSENES = np.array([-30.67, -29.33, -28., -26.66, -25.33, -24
 
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, C_out=128, d=128,
-                 rmax=55.0, K=5,
-                 bin_size=0.5, bev_extent=(-55,55,-55,55),
-                 n_heads=8,    # <-- add: MSDA heads
-                 msda_points=6, # <-- num_points per head in MSDA (keep small)
+                 rmax=51.2, # K is removed, we use the full distribution
+                 bin_size=0.8, bev_extent=(-51.2,51.2,-51.2,51.2),
+                 n_heads=8,
+                 msda_points=6,
                  rv_size=(2,64),
                  vfov=((-30.67,10.67))
                  ):
         super().__init__()
         self.d = d
-        self.K = K
         self.rmax = float(rmax)
         self.bin_size = float(bin_size)
         self.xmin, self.xmax, self.ymin, self.ymax = bev_extent
@@ -39,21 +38,20 @@ class RV2BEVFrustumAttn(nn.Module):
         self.proj_v = nn.Conv2d(C_bev, d, 1, bias=True)
         self.proj_o = nn.Conv2d(d, C_out, 1, bias=True)
 
-        # depth-aware query lift: concat [logσ, 1/σ] to Q, bring back to d
         self.q_depth = nn.Sequential(
-            nn.Conv2d(d + 1, d, 1, bias=True),
+            nn.Conv2d(d + 2, d, 1, bias=True),
             nn.GELU(),
             nn.Conv2d(d, d, 1, bias=True)
         )
 
-        # Light range proposal head 
-        self.n_bins = self.rmax // self.bin_size
+        # Light range proposal head
+        self.n_bins = int(self.rmax // self.bin_size)
         self.range_head = nn.Sequential(
             nn.Conv2d(C_rv + 3, 128, 1, bias=True),
             nn.GroupNorm(8, 128), nn.GELU(),
             nn.Conv2d(128, 64, 3, padding=1, padding_mode="circular", bias=False),
             nn.GroupNorm(8, 64), nn.GELU(),
-            nn.Conv2d(64, int(self.n_bins), 1, bias=True) # depth distribution logits
+            nn.Conv2d(64, self.n_bins, 1, bias=True) # depth distribution logits
         )
         # Build azimuth and zenith maps by rv_size (width spans [-pi, pi))
         self.Hrv, self.Wrv = int(rv_size[0]), int(rv_size[1])
@@ -81,10 +79,8 @@ class RV2BEVFrustumAttn(nn.Module):
         self.register_buffer("u_vec_x", u_vec_x, persistent=False)
         self.register_buffer("u_vec_y", u_vec_y, persistent=False)
         self.register_buffer("u_vec_z", u_vec_z, persistent=False)
-        
-        self.edge_gain    = 4.0    # smooth “clamp” strength for ref coords
+
         self.kl_weight    = 1e-4   # tiny KL prior
-        
 
         #  deformAttn (1 level, 2D)
         self.msda = MSDA(embed_dims=d,
@@ -93,77 +89,93 @@ class RV2BEVFrustumAttn(nn.Module):
                          num_points=msda_points,
                          batch_first=True)
 
+        pe = self.build_sinusoidal_bev_pe(H=128, W=128, C=d, device='cpu')
+        self.register_buffer("bev_pe", pe, persistent=False)
+
+        bin_centers = torch.arange(0.5, self.n_bins + 0.5, 1.0, dtype=torch.float32) * self.bin_size
+        self.register_buffer("bin_centers", bin_centers.view(1, -1, 1, 1), persistent=False)
+
+    def build_sinusoidal_bev_pe(self, H, W, C, device):
+        assert C % 2 == 0, "Embedding dim must be even for sine/cosine PE."
+        pe = torch.zeros(1, C, H, W, device=device)
+        y_pos = torch.arange(0, H, dtype=torch.float, device=device).unsqueeze(1)
+        x_pos = torch.arange(0, W, dtype=torch.float, device=device).unsqueeze(0)
+
+        div_term = torch.exp(torch.arange(0, C // 2, 2, device=device).float() * (-math.log(10000.0) / (C // 2)))
+        pe[0, 0:C//4*2:2, :, :] = torch.sin(x_pos.unsqueeze(0) * div_term.view(-1, 1, 1))
+        pe[0, 1:C//4*2:2, :, :] = torch.cos(x_pos.unsqueeze(0) * div_term.view(-1, 1, 1))
+        pe[0, C//2::2, :, :] = torch.sin(y_pos.unsqueeze(0) * div_term.view(-1, 1, 1))
+        pe[0, C//2+1::2, :, :] = torch.cos(y_pos.unsqueeze(0) * div_term.view(-1, 1, 1))
+        return pe
+
     def forward(self, x_rv, bev, lidar2ego_mat, temperature=1.0):
-        """
-            x_rv (_type_): [B, Hrv, Wrv, Crv]
-            bev (_type_): [B, Cb, Hbev, Wbev]
-            lidar2ego_mat (_type_): [1, 4, 4]
-        """
         B, Hrv, Wrv, Crv = x_rv.shape
         B2, Cb, Hbev, Wbev = bev.shape
-        if B < B2: # handle this inside bev feature extractor bevdepth/base_lss_fpn.py, it happens because of cacheing the batched geometries
+        if B < B2:
             bev = bev[:B, ...]
             B2, Cb, Hbev, Wbev = bev.shape
         assert B == B2
         x_rv = x_rv.permute(0, 3, 1, 2).contiguous()
-        # Azimuth & Coord
         batch_u_vec = self.u_vec.expand(B, -1, -1, -1)
 
         # Projections
-        Q0   = self.proj_q(x_rv)         # [B,d,Hrv,Wrv]
-        Vmap = self.proj_v(bev)          # [B,d,Hbev,Wbev]
+        Q0   = self.proj_q(x_rv)
+        Vmap = self.proj_v(bev)
+        Vmap = Vmap + self.bev_pe
 
-        # Range head -> μ, σ
+        # Range head -> distribution
         range_in = torch.cat([x_rv, batch_u_vec], 1)
         depth_logits = self.range_head(range_in)
-        depth_dist = F.softmax(depth_logits, dim=1)
-        topk_prob, topk_idx = torch.topk(depth_dist, k=self.K, dim=1)   # [B,K,Hrv,Wrv]
-        # Gather bin centers
-        # bin_centers: [1,n_bins,1,1] -> expand along H,W
-        topk_depths = self.bin_size * (topk_idx.to(depth_logits.dtype) + 0.5)
-        topk_depths = topk_depths.clamp_max(self.rmax - 0.5 * self.bin_size)
+        depth_dist = F.softmax(depth_logits / temperature, dim=1)
 
-        # beam endpoint in LiDAR frame
-        x_l = topk_depths * self.u_vec_x #torch.cos(el_) * torch.cos(az_)
-        y_l = topk_depths * self.u_vec_y #torch.cos(el_) * torch.sin(az_)
-        z_l = topk_depths * self.u_vec_z #torch.sin(el_)
+        # Instead of topk, compute expected depth (μ) and standard deviation (σ)
+        mu_d = torch.sum(depth_dist * self.bin_centers, dim=1, keepdim=True)
+
+        # Var[d] = E[d^2] - (E[d])^2
+        var_d = torch.sum(depth_dist * (self.bin_centers ** 2), dim=1, keepdim=True) - (mu_d ** 2)
+        sigma_d = torch.sqrt(var_d.clamp(min=1e-6)) # Add epsilon for stability
+
+        # Project expected depth `mu_d` into 3D space
+        expected_depths = mu_d.clamp_max(self.rmax - 0.5 * self.bin_size)
+        x_l = expected_depths * self.u_vec_x
+        y_l = expected_depths * self.u_vec_y
+        z_l = expected_depths * self.u_vec_z
+        # ==============================================================================
 
         ones = torch.ones_like(x_l)
-        p_lidar_h = torch.stack([x_l, y_l, z_l, ones], dim=-1)   # [B,Hrv,Wrv,4]
-        p_lidar_h = p_lidar_h.view(B, self.K*Hrv*Wrv, 4)                # [B,L,4]
+        # Note: Shape is now [B, 1, Hrv, Wrv], we squeeze the singular dim 1 for stacking
+        p_lidar_h = torch.stack([x_l.squeeze(1), y_l.squeeze(1), z_l.squeeze(1), ones.squeeze(1)], dim=-1)
+        p_lidar_h = p_lidar_h.view(B, Hrv*Wrv, 4)
 
         # LiDAR -> Ego
-        # lidar2ego_mat is [B,4,4] (or [1,4,4] broadcastable)
-        p_ego_h = p_lidar_h @ lidar2ego_mat                      # [B,L,4]
-        p_ego_h = p_ego_h.view(B, self.K, Hrv, Wrv, 4) # xyzw per latent beam
+        p_ego_h = p_lidar_h @ lidar2ego_mat
+        p_ego_h = p_ego_h.view(B, Hrv, Wrv, 4)
 
-        # splat onto bev plane
+        # Splat onto BEV plane and normalize to get reference points
         x_ego = p_ego_h[..., 0]
         y_ego = p_ego_h[..., 1]
+        rx = (x_ego - self.xmin) / (self.xmax - self.xmin)
+        ry = (y_ego - self.ymin) / (self.ymax - self.ymin)
+        # Note: Shape is now [B, Hrv*Wrv, 1, 2]
+        ref = torch.stack([ry.clamp(0,1), rx.clamp(0,1)], dim=-1).view(B, Hrv*Wrv, 1, 2)
 
-        # Normalize to [0,1] linearly
-        rx = (x_ego - self.xmin) / (self.xmax - self.xmin)   # [B,Hrv,Wrv]
-        ry = (y_ego - self.ymin) / (self.ymax - self.ymin)   # [B,Hrv,Wrv]
-        valid_ref = (rx >= 0) & (rx <= 1) & (ry >= 0) & (ry <= 1)
-        ref = torch.stack([rx.clamp(0,1), ry.clamp(0,1)], dim=-1).view(B, self.K*Hrv*Wrv, 1, 2)
+        # Augment query with depth mean and std dev, normalized for stability
+        mu_norm = (mu_d / self.rmax).clamp(0, 1)
+        sigma_norm = (sigma_d / self.rmax).clamp(0, 1)
 
-        # ---- σ-aware query augmentation ----
-        Q_tiled = Q0.unsqueeze(1).repeat(1, self.K, 1, 1, 1)        # [B,K,d,H,W]
-        depth_norm = (topk_depths / self.rmax).unsqueeze(2)         # [B,K,1,H,W]
-        Q_depth = torch.cat([Q_tiled, depth_norm], dim=2)           # [B,K,d+1,H,W]
-        Q_depth = Q_depth.view(B*self.K, self.d+1, Hrv, Wrv)
-        Q_depth = self.q_depth(Q_depth)               
+        Q_aug = torch.cat([Q0, mu_norm, sigma_norm], dim=1) # [B, d+2, Hrv, Wrv]
+        Q_depth = self.q_depth(Q_aug)
 
-        # Flatten to (B, L*K, d)
-        query = Q_depth.permute(0,2,3,1).reshape(B, self.K*Hrv*Wrv, self.d)  # [B,L*K,d]
-        value = Vmap.flatten(2).transpose(1,2).contiguous()    
-        # flatten for MSDA
+        # Flatten query and value for MSDA
+        query = Q_depth.view(B, self.d, Hrv * Wrv).transpose(1, 2).contiguous() # [B, Hrv*Wrv, d]
+        value = Vmap.flatten(2).transpose(1,2).contiguous() # [B, Hbev*Wbev, d]
+
         original_dtype = query.dtype
-        value = value.to(torch.float32) # [B,Hbev*Wbev,d]
+        value = value.to(torch.float32)
         query = query.to(torch.float32)
         spatial_shapes = torch.as_tensor([[Hbev, Wbev]], device=bev.device, dtype=torch.long)
         level_start_index = torch.as_tensor([0], device=bev.device, dtype=torch.long)
-        # without disabling autocasts, amp casts tensors to half which msda does not support
+
         with torch.cuda.amp.autocast(enabled=False):
             y_msda = self.msda(query=query,
                                 reference_points=ref,
@@ -171,12 +183,19 @@ class RV2BEVFrustumAttn(nn.Module):
                                 spatial_shapes=spatial_shapes,
                                 level_start_index=level_start_index,
                                 key_padding_mask=None)
-        y_msda = y_msda.view(B, self.K, Hrv, Wrv, self.d) 
-        w = topk_prob / (topk_prob.sum(dim=1, keepdim=True) + 1e-8)  # [B,K,H,W]
-        y = (y_msda * w.unsqueeze(-1)).sum(dim=1)               # [B,H,W,d]
-        y = y.permute(0,3,1,2).contiguous()     
-        y = self.proj_o(y)                                                  # [B,C_out,Hrv,Wrv]
+
+        # Reshape output back to image format
+        y = y_msda.transpose(1, 2).contiguous().view(B, self.d, Hrv, Wrv)
+        y = self.proj_o(y)
         y = y.permute(0,2,3,1).contiguous()
 
-        return y, depth_logits, None
+        # Encourages smoother, less peaky distributions
+        log_p = F.log_softmax(depth_logits, dim=1)
+        # Target is a uniform distribution
+        log_q_uniform = torch.full_like(log_p, -math.log(self.n_bins))
+        # KL(P || Q) = Σ P(x) * (log P(x) - log Q(x))
+        # Note: F.kl_div expects (input, target) where input is log-prob
+        kl_loss = F.kl_div(log_p, log_q_uniform, reduction='batchmean', log_target=True) * self.kl_weight
 
+        # Return the KL loss to be added to the main training objective
+        return y, depth_logits, kl_loss

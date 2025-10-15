@@ -62,8 +62,8 @@ class CMTULIP(TULIP):
         self.multiview_backbone = BaseLSSFPN(**backbone_config)
         self.load_lss_weights(lss_weights_path)
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
-        self.max_range = 55
-        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, C_out=384)
+        self.max_range = 51.2
+        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, C_out=384, rmax=self.max_range, bin_size=0.8)
         self.range_head_weight = 0.05
     
     def load_lss_weights(self, lss_weights_path, strict=False):
@@ -153,7 +153,7 @@ class CMTULIP(TULIP):
             x = layer(x)
 
         x = self.first_patch_expanding(x)
-        x, rh_preds, aux = self.frust_attn(x, bev_feat, lidar2ego_mat)
+        x, rh_preds, kl_loss = self.frust_attn(x, bev_feat, lidar2ego_mat)
         
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
@@ -177,10 +177,10 @@ class CMTULIP(TULIP):
         if mc_drop:
             return x
         else:
-            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, range_head_target, rh_preds, aux)
+            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, kl_loss)
             return x, total_loss, pixel_loss, range_head_loss
 
-    def forward_loss(self, pred, target, range_head_target, depth_logits, aux=None):
+    def forward_loss(self, pred, target, loss_kl):
         # range_head_target is normalized by max_range
         loss = (pred - target).abs()
         loss = loss.mean()
@@ -190,25 +190,12 @@ class CMTULIP(TULIP):
         else:
             pixel_loss = loss.clone()
         
-        valid_mask = ~torch.isnan(range_head_target)
-        valid_mask = valid_mask.reshape(-1)
-        
-        soft_tgt = self.gaussian_bins_targets(range_head_target, rmax=self.max_range)
-        log_probs = F.log_softmax(depth_logits, dim=1)                    # [B,n_bins,H,W]
-
-        # Only compute on valid pixels
-        lp  = log_probs.permute(0,2,3,1).reshape(-1, log_probs.size(1))   # [(BHW), n_bins]
-        tgt = soft_tgt.permute(0,2,3,1).reshape(-1, soft_tgt.size(1))     # [(BHW), n_bins]
-        loss_kl = F.kl_div(lp[valid_mask], tgt[valid_mask], reduction='batchmean') 
-        loss += self.range_head_weight * loss_kl
-
-        if aux is not None:
-            loss += aux["L_kl_mu_sigma"]
+        loss+=loss_kl
 
         return loss, pixel_loss, loss_kl
     
     
-    def gaussian_bins_targets(self, gt_depth, bin_size=0.5, rmax=55.0, sigma_bins=1.0):
+    def gaussian_bins_targets(self, gt_depth, bin_size=0.8, rmax=51.2, sigma_bins=1.0):
         # returns soft targets: [B, n_bins, H, W], sum=1 per pixel
         B, H, W = gt_depth.shape
         gt_depth = (gt_depth * rmax)
