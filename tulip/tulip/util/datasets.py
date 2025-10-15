@@ -499,8 +499,7 @@ class RVWithImageDataset(Dataset):
             low_res_rv,
             high_res_rv,
             lidar2ego_mat,
-            torch.from_numpy(mask_sample),
-            torch.from_numpy(range_head_target)
+            # torch.from_numpy(mask_sample),
         ]
 
         return ret_list
@@ -517,8 +516,7 @@ def collate_fn(data):
     lr_rv_samples_batch = list()
     hr_rv_samples_batch = list()
     lidar2ego_mat = None
-    mask_samples_batch = list()
-    range_head_targets_batch = list()
+    # mask_samples_batch = list()
     for iter_data in data:
         (
             sweep_imgs,
@@ -532,9 +530,8 @@ def collate_fn(data):
             lr_rv_sample,
             hr_rv_sample,
             lidar2ego_mat_tmp,
-            mask_sample,
-            range_head_target
-        ) = iter_data[:13]
+            # mask_sample,
+        ) = iter_data[:11]
         
         if lidar2ego_mat is None:
             lidar2ego_mat = lidar2ego_mat_tmp
@@ -549,8 +546,7 @@ def collate_fn(data):
         img_metas_batch.append(img_metas)
         lr_rv_samples_batch.append(lr_rv_sample)
         hr_rv_samples_batch.append(hr_rv_sample)
-        mask_samples_batch.append(mask_sample)
-        range_head_targets_batch.append(range_head_target)
+        # mask_samples_batch.append(mask_sample)
     mats_dict = dict()
     mats_dict['sensor2ego_mats'] = torch.stack(sensor2ego_mats_batch)
     mats_dict['intrin_mats'] = torch.stack(intrin_mats_batch)
@@ -565,8 +561,7 @@ def collate_fn(data):
         torch.stack(lr_rv_samples_batch),
         torch.stack(hr_rv_samples_batch),
         torch.from_numpy(lidar2ego_mat).float(),
-        torch.stack(mask_samples_batch),
-        torch.stack(range_head_targets_batch)
+        # torch.stack(mask_samples_batch),
     ]
 
     return ret_list
