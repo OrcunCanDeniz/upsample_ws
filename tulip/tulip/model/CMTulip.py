@@ -63,10 +63,7 @@ class CMTULIP(TULIP):
         self.load_lss_weights(lss_weights_path)
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
         self.max_range = 51.2
-        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, rmax=self.max_range, bin_size=0.8,
-                                            x_bound=backbone_config['x_bound'],
-                                            y_bound=backbone_config['y_bound'],
-                                            z_bound=backbone_config['z_bound'])
+        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, rmax=self.max_range, bin_size=0.8)
         self.range_head_weight = 0.05
     
     def load_lss_weights(self, lss_weights_path, strict=False):
