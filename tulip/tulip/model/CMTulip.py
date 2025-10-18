@@ -63,7 +63,10 @@ class CMTULIP(TULIP):
         self.load_lss_weights(lss_weights_path)
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
         self.max_range = 51.2
-        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, C_out=384, rmax=self.max_range, bin_size=0.8)
+        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, rmax=self.max_range, bin_size=0.8,
+                                            x_bound=backbone_config['x_bound'],
+                                            y_bound=backbone_config['y_bound'],
+                                            z_bound=backbone_config['z_bound'])
         self.range_head_weight = 0.05
     
     def load_lss_weights(self, lss_weights_path, strict=False):
@@ -154,7 +157,7 @@ class CMTULIP(TULIP):
 
         x = self.first_patch_expanding(x)
         x, rh_preds, kl_loss = self.frust_attn(x, bev_feat, lidar2ego_mat)
-        
+
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
             x = self.skip_connection_layers[i](x)
@@ -190,7 +193,7 @@ class CMTULIP(TULIP):
         else:
             pixel_loss = loss.clone()
         
-        loss+=loss_kl
+        # loss+=loss_kl
 
         return loss, pixel_loss, loss_kl
     
