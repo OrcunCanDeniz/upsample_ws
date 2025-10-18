@@ -166,7 +166,7 @@ class SimpleQueryGenerator(nn.Module):
         p_lidar_h = p_lidar_h.view(B, -1, 4)
 
         # LiDAR -> Ego
-        p_ego_h = p_lidar_h @ lidar2ego_mat
+        p_ego_h = p_lidar_h @ lidar2ego_mat.T
         p_ego_h = p_ego_h.view(B, Hrv, Wrv, self.num_q_per_latent_cell, 4)
         
         return p_ego_h, depth_activation
