@@ -36,10 +36,13 @@ backbone:
   
   # Image neck configuration
   img_neck_conf:
-    type: 'SECONDFPN'
+    type: 'FPN'
     in_channels: [256, 512, 1024, 2048]
-    upsample_strides: [0.25, 0.5, 1, 2]
-    out_channels: [128, 128, 128, 128]
+    out_channels: 128
+    start_level: 0
+    add_extra_convs: 'on_output'
+    num_outs: 4
+    relu_before_extra_convs: True
   
   # Depth network configuration
   depth_net_conf:
@@ -61,7 +64,7 @@ keep_close_scan: false
 keep_far_scan: false
 
 # Training configuration
-batch_size: 48  # From bash script
+batch_size: 8  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
@@ -87,7 +90,7 @@ noise_threshold: 0.03
 grid_size: 0.1
 
 # Logging and monitoring
-wandb_disabled: false
+wandb_disabled: true
 entity: 'pnp_dnp'
 project_name: 'upsample'
 run_name: 'cmtulip_base_nusc'

@@ -71,26 +71,21 @@ def train_one_epoch(model: torch.nn.Module,
 
         # we use a per iteration (instead of per epoch) lr scheduler
         cam_imgs = data[0]
-        mats_dict = data[1]
-        timestamps = data[2]
-        img_metas = data[3]
-        samples_low_res = data[4]
-        samples_high_res = data[5]
-        lidar2ego_mat = data[6]
-        mask_samples = data[7]
-        range_head_targets = data[8]
+        samples_low_res = data[1]
+        samples_high_res = data[2]
+        lidar2img_rts = data[3]
+        img_shapes = data[4]
         
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
         samples_low_res = samples_low_res.to(device, non_blocking=True)
         samples_high_res = samples_high_res.to(device, non_blocking=True)
-        lidar2ego_mat = lidar2ego_mat.to(device, non_blocking=True)
-        range_head_targets = range_head_targets.to(device, non_blocking=True)
-
+        lidar2img_rts = lidar2img_rts.to(device, non_blocking=True)
+        img_shapes = img_shapes.to(device, non_blocking=True)
+        
         with torch.cuda.amp.autocast():
-            _, total_loss, pixel_loss, range_head_loss = model(samples_low_res, cam_imgs, 
-                                              mats_dict, timestamps, samples_high_res, lidar2ego_mat, range_head_targets)
+            _, total_loss, pixel_loss, range_head_loss = model(samples_low_res, cam_imgs, lidar2img_rts, img_shapes, samples_high_res)
 
         total_loss_value = total_loss.item()
         pixel_loss_value = pixel_loss.item()
@@ -113,7 +108,8 @@ def train_one_epoch(model: torch.nn.Module,
         torch.cuda.synchronize()
 
         metric_logger.update(loss=total_loss_value)
-        metric_logger.update(L_main=range_head_loss_value)
+        metric_logger.update(pixel_loss=pixel_loss_value)
+        metric_logger.update(interm_range_loss=range_head_loss_value)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)

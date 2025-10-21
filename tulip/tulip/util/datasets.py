@@ -288,22 +288,10 @@ class RVWithImageDataset(Dataset):
         crop_w = int(max(0, newW - fW) / 2)
         crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
         
-        ida_rot = torch.eye(2)
-        ida_tran = torch.zeros(2)
         # adjust image
         img = img.resize(resize_dims)
-        img = img.crop(crop)
 
-        # post-homography transformation
-        ida_rot *= resize
-        ida_tran -= torch.Tensor(crop[:2])
-
-        ida_mat = ida_rot.new_zeros(4, 4)
-        ida_mat[3, 3] = 1
-        ida_mat[2, 2] = 1
-        ida_mat[:2, :2] = ida_rot
-        ida_mat[:2, 3] = ida_tran
-        return img, ida_mat
+        return img
         
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
         return [""], {"":0}
@@ -332,20 +320,18 @@ class RVWithImageDataset(Dataset):
         assert len(cam_infos) > 0
 
         sweep_imgs = list()
-        sweep_sensor2ego_mats = list()
         sweep_intrin_mats = list()
-        sweep_ida_mats = list()
-        sweep_sensor2sensor_mats = list()
-        sweep_timestamps = list()
+        sweep_lidar2img_rts = list()
+        sweep_lidar2cam_rts = list()
+        image_metas = list()
 
         for cam in cams:
             imgs = list()
-            sensor2ego_mats = list()
             intrin_mats = list()
-            ida_mats = list()
-            sensor2sensor_mats = list()
-            timestamps = list()
             key_info = cam_infos[0]
+            lidar2img_rts = list()
+            lidar2cam_rts = list()
+            
             # TODO: change this if needed to add ida
             # resize, resize_dims, crop, flip, \
             #     rotate_ida = self.sample_ida_augmentation(
@@ -353,99 +339,52 @@ class RVWithImageDataset(Dataset):
             for sweep_idx, cam_info in enumerate(cam_infos):
                 img = Image.open(
                     os.path.join(self.data_root, cam_info[cam]['filename']))
-                # img = Image.fromarray(img)
-                w, x, y, z = cam_info[cam]['calibrated_sensor']['rotation']
-                # sweep sensor to sweep ego
-                sweepsensor2sweepego_rot = torch.Tensor(
-                    Quaternion(w, x, y, z).rotation_matrix)
-                sweepsensor2sweepego_tran = torch.Tensor(
-                    cam_info[cam]['calibrated_sensor']['translation'])
-                sweepsensor2sweepego = sweepsensor2sweepego_rot.new_zeros(
-                    (4, 4))
-                sweepsensor2sweepego[3, 3] = 1
-                sweepsensor2sweepego[:3, :3] = sweepsensor2sweepego_rot
-                sweepsensor2sweepego[:3, -1] = sweepsensor2sweepego_tran
-                # sweep ego to global
-                w, x, y, z = cam_info[cam]['ego_pose']['rotation']
-                sweepego2global_rot = torch.Tensor(
-                    Quaternion(w, x, y, z).rotation_matrix)
-                sweepego2global_tran = torch.Tensor(
-                    cam_info[cam]['ego_pose']['translation'])
-                sweepego2global = sweepego2global_rot.new_zeros((4, 4))
-                sweepego2global[3, 3] = 1
-                sweepego2global[:3, :3] = sweepego2global_rot
-                sweepego2global[:3, -1] = sweepego2global_tran
-
-                # global sensor to cur ego
-                w, x, y, z = key_info[cam]['ego_pose']['rotation']
-                keyego2global_rot = torch.Tensor(
-                    Quaternion(w, x, y, z).rotation_matrix)
-                keyego2global_tran = torch.Tensor(
-                    key_info[cam]['ego_pose']['translation'])
-                keyego2global = keyego2global_rot.new_zeros((4, 4))
-                keyego2global[3, 3] = 1
-                keyego2global[:3, :3] = keyego2global_rot
-                keyego2global[:3, -1] = keyego2global_tran
-                global2keyego = keyego2global.inverse()
-
-                # cur ego to sensor
-                w, x, y, z = key_info[cam]['calibrated_sensor']['rotation']
-                keysensor2keyego_rot = torch.Tensor(
-                    Quaternion(w, x, y, z).rotation_matrix)
-                keysensor2keyego_tran = torch.Tensor(
-                    key_info[cam]['calibrated_sensor']['translation'])
-                keysensor2keyego = keysensor2keyego_rot.new_zeros((4, 4))
-                keysensor2keyego[3, 3] = 1
-                keysensor2keyego[:3, :3] = keysensor2keyego_rot
-                keysensor2keyego[:3, -1] = keysensor2keyego_tran
-                keyego2keysensor = keysensor2keyego.inverse()
-                keysensor2sweepsensor = (
-                    keyego2keysensor @ global2keyego @ sweepego2global
-                    @ sweepsensor2sweepego).inverse()
-                sweepsensor2keyego = global2keyego @ sweepego2global @\
-                    sweepsensor2sweepego
-                sensor2ego_mats.append(sweepsensor2keyego)
-                sensor2sensor_mats.append(keysensor2sweepsensor)
-                intrin_mat = torch.zeros((4, 4))
+                intrin_mat = np.zeros((4, 4))
                 intrin_mat[3, 3] = 1
-                intrin_mat[:3, :3] = torch.Tensor(
+                intrin_mat[:3, :3] = np.array(
                     cam_info[cam]['calibrated_sensor']['camera_intrinsic'])
 
-                img, ida_mat = self.img_transform(img)
-                ida_mats.append(ida_mat)
+                img = self.img_transform(img)
+                
+                lidar2cam_r = np.linalg.inv(cam_info[cam]['sensor2lidar_rotation'])
+                lidar2cam_t = cam_info[
+                    cam]['sensor2lidar_translation'] @ lidar2cam_r.T
+                lidar2cam_rt = np.eye(4)
+                lidar2cam_rt[:3, :3] = lidar2cam_r.T
+                lidar2cam_rt[3, :3] = -lidar2cam_t
+                lidar2img_rt = (intrin_mat @ lidar2cam_rt.T)
+                lidar2img_rts.append(torch.from_numpy(lidar2img_rt).float())
+                lidar2cam_rts.append(torch.from_numpy(lidar2cam_rt).float())
+                
                 img = mmcv.imnormalize(np.array(img), self.img_mean,
                                        self.img_std, self.to_rgb)
                 img = torch.from_numpy(img).permute(2, 0, 1)
                 imgs.append(img)
-                intrin_mats.append(intrin_mat)
-                timestamps.append(cam_info[cam]['timestamp'])
+                intrin_mats.append(torch.from_numpy(intrin_mat).float())
+                
             sweep_imgs.append(torch.stack(imgs))
-            sweep_sensor2ego_mats.append(torch.stack(sensor2ego_mats))
             sweep_intrin_mats.append(torch.stack(intrin_mats))
-            sweep_ida_mats.append(torch.stack(ida_mats))
-            sweep_sensor2sensor_mats.append(torch.stack(sensor2sensor_mats))
-            sweep_timestamps.append(torch.tensor(timestamps))
+            sweep_lidar2img_rts.append(torch.stack(lidar2img_rts))
+            sweep_lidar2cam_rts.append(torch.stack(lidar2cam_rts))
 
         # Get mean pose of all cams.
         ego2global_rotation = np.mean(
             [key_info[cam]['ego_pose']['rotation'] for cam in cams], 0)
         ego2global_translation = np.mean(
             [key_info[cam]['ego_pose']['translation'] for cam in cams], 0)
-        img_metas = dict(
-            box_type_3d=LiDARInstance3DBoxes,
-            ego2global_translation=ego2global_translation,
-            ego2global_rotation=ego2global_rotation,
-        )
+        # img_metas = dict(
+        #     box_type_3d=LiDARInstance3DBoxes,
+        #     ego2global_translation=ego2global_translation,
+        #     ego2global_rotation=ego2global_rotation,
+        # )
 
         ret_list = [
             torch.stack(sweep_imgs).permute(1, 0, 2, 3, 4),
-            torch.stack(sweep_sensor2ego_mats).permute(1, 0, 2, 3),
             torch.stack(sweep_intrin_mats).permute(1, 0, 2, 3),
-            torch.stack(sweep_ida_mats).permute(1, 0, 2, 3),
-            torch.stack(sweep_sensor2sensor_mats).permute(1, 0, 2, 3),
-            torch.stack(sweep_timestamps).permute(1, 0),
-            img_metas,
-        ]
+            torch.cat(sweep_lidar2img_rts, dim=0),
+            torch.stack(sweep_lidar2cam_rts).permute(1, 0, 2, 3),
+            torch.tensor(img.shape[1:])
+        ] # not returning image_metas but keep popullating it in case we need it later
 
         return ret_list
     
@@ -465,11 +404,11 @@ class RVWithImageDataset(Dataset):
         range_mask = np.logical_and(rv_sample >= self.min_range, rv_sample <= self.max_range)
         mask_sample = np.logical_and(mask_sample, range_mask) # pixel should satisfy both range and mask
         # Load precomputed range_head_target from disk instead of computing on-the-fly
-        head_target_rel = sample_info['lidar_info'].get('range_head_target_path')
-        if head_target_rel is None:
-            raise KeyError('range_head_target_path missing in lidar_info')
-        head_target_path = os.path.join(self.data_root, head_target_rel)
-        range_head_target = mdim_npy_loader(head_target_path)[0]
+        # head_target_rel = sample_info['lidar_info'].get('range_head_target_path')
+        # if head_target_rel is None:
+        #     raise KeyError('range_head_target_path missing in lidar_info')
+        # head_target_path = os.path.join(self.data_root, head_target_rel)
+        # range_head_target = mdim_npy_loader(head_target_path)[0]
         low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
         
@@ -478,95 +417,60 @@ class RVWithImageDataset(Dataset):
         image_list = self.get_image(sample_info['cam_infos'], self.cam_names)
         (
             sweep_imgs,
-            sweep_sensor2ego_mats,
             sweep_intrins,
-            sweep_ida_mats,
-            sweep_sensor2sensor_mats,
-            sweep_timestamps,
-            img_metas,
-        ) = image_list[:7]
-        img_metas['token'] = sample_info['sample_token']
-        bda_mat = torch.eye(4)
+            sweep_lidar2img_rts,
+            sweep_lidar2cam_rts,
+            img_shape,
+        ) = image_list
         ret_list = [
             sweep_imgs,
-            sweep_sensor2ego_mats,
             sweep_intrins,
-            sweep_ida_mats,
-            sweep_sensor2sensor_mats,
-            bda_mat,
-            sweep_timestamps,
-            img_metas,
+            sweep_lidar2img_rts,
+            sweep_lidar2cam_rts,
             low_res_rv,
             high_res_rv,
             lidar2ego_mat,
             torch.from_numpy(mask_sample),
-            torch.from_numpy(range_head_target)
+            img_shape,
+            sample_info['sample_token']
+            # torch.from_numpy(range_head_target)
         ]
 
         return ret_list
 
 def collate_fn(data):
     imgs_batch = list()
-    sensor2ego_mats_batch = list()
     intrin_mats_batch = list()
-    ida_mats_batch = list()
-    sensor2sensor_mats_batch = list()
-    bda_mat_batch = list()
-    timestamps_batch = list()
-    img_metas_batch = list()
     lr_rv_samples_batch = list()
     hr_rv_samples_batch = list()
-    lidar2ego_mat = None
-    mask_samples_batch = list()
-    range_head_targets_batch = list()
+    sweep_lidar2img_rts_batch = list()
+    img_shapes_batch = list()
     for iter_data in data:
         (
             sweep_imgs,
-            sweep_sensor2ego_mats,
             sweep_intrins,
-            sweep_ida_mats,
-            sweep_sensor2sensor_mats,
-            bda_mat,
-            sweep_timestamps,
-            img_metas,
+            sweep_lidar2img_rts,
+            sweep_lidar2cam_rts,
             lr_rv_sample,
             hr_rv_sample,
             lidar2ego_mat_tmp,
             mask_sample,
-            range_head_target
-        ) = iter_data[:13]
+            img_shape,
+            sample_token,
+        ) = iter_data
         
-        if lidar2ego_mat is None:
-            lidar2ego_mat = lidar2ego_mat_tmp
         
         imgs_batch.append(sweep_imgs)
-        sensor2ego_mats_batch.append(sweep_sensor2ego_mats)
-        intrin_mats_batch.append(sweep_intrins)
-        ida_mats_batch.append(sweep_ida_mats)
-        sensor2sensor_mats_batch.append(sweep_sensor2sensor_mats)
-        bda_mat_batch.append(bda_mat)
-        timestamps_batch.append(sweep_timestamps)
-        img_metas_batch.append(img_metas)
         lr_rv_samples_batch.append(lr_rv_sample)
         hr_rv_samples_batch.append(hr_rv_sample)
-        mask_samples_batch.append(mask_sample)
-        range_head_targets_batch.append(range_head_target)
-    mats_dict = dict()
-    mats_dict['sensor2ego_mats'] = torch.stack(sensor2ego_mats_batch)
-    mats_dict['intrin_mats'] = torch.stack(intrin_mats_batch)
-    mats_dict['ida_mats'] = torch.stack(ida_mats_batch)
-    mats_dict['sensor2sensor_mats'] = torch.stack(sensor2sensor_mats_batch)
-    mats_dict['bda_mat'] = torch.stack(bda_mat_batch)
+        sweep_lidar2img_rts_batch.append(sweep_lidar2img_rts)
+        img_shapes_batch.append(img_shape)
     ret_list = [
         torch.stack(imgs_batch),
-        mats_dict,
-        torch.stack(timestamps_batch),
-        img_metas_batch,
         torch.stack(lr_rv_samples_batch),
         torch.stack(hr_rv_samples_batch),
-        torch.from_numpy(lidar2ego_mat).float(),
-        torch.stack(mask_samples_batch),
-        torch.stack(range_head_targets_batch)
+        torch.stack(sweep_lidar2img_rts_batch),
+        torch.stack(img_shapes_batch),
     ]
 
     return ret_list

@@ -5,6 +5,7 @@ from nuscenes.nuscenes import NuScenes
 from nuscenes.utils import splits
 from sample_nuscenes_dataset import NuScenesPointCloudToRangeImage
 from tqdm import tqdm
+from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from skimage.measure import block_reduce
 import pdb
 
@@ -51,6 +52,17 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
                 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT', 'CAM_BACK',
                 'CAM_BACK_LEFT', 'CAM_FRONT_LEFT'
             ]
+            sd_rec = nusc.get('sample_data', cur_sample['data']['LIDAR_TOP'])
+            cs_record = nusc.get('calibrated_sensor',
+                             sd_rec['calibrated_sensor_token'])
+            pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
+            l2e_r = cs_record['rotation']
+            l2e_t = cs_record['translation']
+            e2g_r = pose_record['rotation']
+            e2g_t = pose_record['translation']
+            l2e_r_mat = Quaternion(l2e_r).rotation_matrix
+            e2g_r_mat = Quaternion(e2g_r).rotation_matrix
+            
             cam_infos = dict()
             lidar_infos = dict()
             for cam_name in cam_names:
@@ -68,21 +80,28 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
                 sweep_cam_info['filename'] = cam_data['filename']
                 sweep_cam_info['calibrated_sensor'] = nusc.get(
                     'calibrated_sensor', cam_data['calibrated_sensor_token'])
+                
+                cam_info = obtain_sensor2top(nusc, cur_sample['data'][cam_name], 
+                                             l2e_t, l2e_r_mat,
+                                             e2g_t, e2g_r_mat, cam_name)
+                sweep_cam_info.update({"sensor2lidar_translation": cam_info["sensor2lidar_translation"]})
+                sweep_cam_info.update({"sensor2lidar_rotation": cam_info["sensor2lidar_rotation"]})
+                
                 cam_infos[cam_name] = sweep_cam_info
 
             lidar_data = nusc.get('sample_data',
                                     cur_sample['data'][lidar_name])
             # pdb.set_trace()
-            lidar_pts = np.fromfile(f"{nusc.dataroot}/{lidar_data['filename']}", dtype=np.float32).reshape(-1, 5)
+            # lidar_pts = np.fromfile(f"{nusc.dataroot}/{lidar_data['filename']}", dtype=np.float32).reshape(-1, 5)
             # Convert to range image using the new converter
             rv_out_name = lidar_data['filename'].split('.')[0] + '_RV.npy'
             rv_out_path = os.path.join(split_rv_dir, rv_out_name.split('/')[-1])
-            range_intensity_map = converter(lidar_pts)
-            np.save(rv_out_path, range_intensity_map.astype(np.float32))
+            # range_intensity_map = converter(lidar_pts)
+            # np.save(rv_out_path, range_intensity_map.astype(np.float32))
             
-            range_head_target = create_depth_target(range_intensity_map[...,0], range_intensity_map[..., -1].astype(np.bool))
+            # range_head_target = create_depth_target(range_intensity_map[...,0], range_intensity_map[..., -1].astype(np.bool))
             head_target_out_path = os.path.join(split_head_target_dir, rv_out_name.split('/')[-1])
-            np.save(head_target_out_path, range_head_target.astype(np.float32))
+            # np.save(head_target_out_path, range_head_target.astype(np.float32))
             
             lidar_datas.append(lidar_data)
             sweep_lidar_info = dict()
@@ -111,6 +130,67 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
                 cur_sample = nusc.get('sample', cur_sample['next'])
     return infos
 
+
+def obtain_sensor2top(nusc,
+                      sensor_token,
+                      l2e_t,
+                      l2e_r_mat,
+                      e2g_t,
+                      e2g_r_mat,
+                      sensor_type='lidar'):
+    """Obtain the info with RT matric from general sensor to Top LiDAR.
+
+    Args:
+        nusc (class): Dataset class in the nuScenes dataset.
+        sensor_token (str): Sample data token corresponding to the
+            specific sensor type.
+        l2e_t (np.ndarray): Translation from lidar to ego in shape (1, 3).
+        l2e_r_mat (np.ndarray): Rotation matrix from lidar to ego
+            in shape (3, 3).
+        e2g_t (np.ndarray): Translation from ego to global in shape (1, 3).
+        e2g_r_mat (np.ndarray): Rotation matrix from ego to global
+            in shape (3, 3).
+        sensor_type (str): Sensor to calibrate. Default: 'lidar'.
+
+    Returns:
+        sweep (dict): Sweep information after transformation.
+    """
+    sd_rec = nusc.get('sample_data', sensor_token)
+    cs_record = nusc.get('calibrated_sensor',
+                         sd_rec['calibrated_sensor_token'])
+    pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
+    data_path = str(nusc.get_sample_data_path(sd_rec['token']))
+    if os.getcwd() in data_path:  # path from lyftdataset is absolute path
+        data_path = data_path.split(f'{os.getcwd()}/')[-1]  # relative path
+    sweep = {
+        'data_path': data_path,
+        'type': sensor_type,
+        'sample_data_token': sd_rec['token'],
+        'sensor2ego_translation': cs_record['translation'],
+        'sensor2ego_rotation': cs_record['rotation'],
+        'ego2global_translation': pose_record['translation'],
+        'ego2global_rotation': pose_record['rotation'],
+        'timestamp': sd_rec['timestamp']
+    }
+
+    l2e_r_s = sweep['sensor2ego_rotation']
+    l2e_t_s = sweep['sensor2ego_translation']
+    e2g_r_s = sweep['ego2global_rotation']
+    e2g_t_s = sweep['ego2global_translation']
+
+    # obtain the RT from sensor to Top LiDAR
+    # sweep->ego->global->ego'->lidar
+    l2e_r_s_mat = Quaternion(l2e_r_s).rotation_matrix
+    e2g_r_s_mat = Quaternion(e2g_r_s).rotation_matrix
+    R = (l2e_r_s_mat.T @ e2g_r_s_mat.T) @ (
+        np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
+    T = (l2e_t_s @ e2g_r_s_mat.T + e2g_t_s) @ (
+        np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
+    T -= e2g_t @ (np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T
+                  ) + l2e_t @ np.linalg.inv(l2e_r_mat).T
+    sweep['sensor2lidar_rotation'] = R.T  # points @ R.T + T
+    sweep['sensor2lidar_translation'] = T
+    return sweep
 
 def main():
     data_root = './data/nuscenes/'

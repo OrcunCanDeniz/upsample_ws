@@ -8,8 +8,8 @@ from functools import partial
 from util.filter import *
 
 from .tulip import TULIP
-from bevdepth.layers.backbones.base_lss_fpn import BaseLSSFPN
-from .frustum_attention import RV2BEVFrustumAttn
+from .image_backbone import ImageBackbone
+from .RV2MVImg_attn import RV2MVImgAttn
 import os
 
 import pdb
@@ -29,11 +29,11 @@ def freeze_multiview_backbone(model):
     assert hasattr(m, "multiview_backbone"), "model has no attribute 'multiview_backbone'"
 
     # 1) Freeze params (incl. BN affine)
-    for p in m.multiview_backbone.parameters():
+    for p in m.multiview_backbone.img_backbone.parameters():
         p.requires_grad = False
 
     # 2) Stop BN running stats updates
-    m.multiview_backbone.apply(_set_bn_eval)
+    m.multiview_backbone.img_backbone.apply(_set_bn_eval)
 
 def unfreeze_multiview_backbone(model, train_bn: bool = True):
     """
@@ -44,14 +44,14 @@ def unfreeze_multiview_backbone(model, train_bn: bool = True):
     assert hasattr(m, "multiview_backbone"), "model has no attribute 'multiview_backbone'"
 
     # 1) Unfreeze params
-    for p in m.multiview_backbone.parameters():
+    for p in m.multiview_backbone.img_backbone.parameters():
         p.requires_grad = True
 
     # 2) BN behavior
     if train_bn:
-        m.multiview_backbone.train()      # BN stats update again
+        m.multiview_backbone.img_backbone.train()      # BN stats update again
     else:
-        m.multiview_backbone.apply(_set_bn_eval)  # keep stats frozen
+        m.multiview_backbone.img_backbone.apply(_set_bn_eval)  # keep stats frozen
 
 class CMTULIP(TULIP):
     def __init__(self, backbone_config, lss_weights_path, im2col_step=128, **kwargs):
@@ -59,12 +59,13 @@ class CMTULIP(TULIP):
 
         self.init = False
         self.apply(self.init_weights)
-        self.multiview_backbone = BaseLSSFPN(**backbone_config)
+        self.multiview_backbone = ImageBackbone(backbone_config)
         self.load_lss_weights(lss_weights_path)
-        self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
-        self.max_range = 51.2
-        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, rmax=self.max_range, bin_size=0.8)
-        self.range_head_weight = 0.05
+        self.max_range = 55.0
+        self.fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8)
+        self.range_head_weight = 1.0
+        self.decoder_pred = nn.Conv2d(in_channels=backbone_config["img_neck_conf"]["out_channels"], out_channels=1, kernel_size=(1, 1), bias=False)
+        
     
     def load_lss_weights(self, lss_weights_path, strict=False):
         """
@@ -142,8 +143,8 @@ class CMTULIP(TULIP):
             return False
 
 
-    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, range_head_target, mc_drop = False):
-        bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
+    def forward(self, x, in_imgs, lidar2img_rts, img_shapes, target, mc_drop = False):
+        img_feats = self.multiview_backbone(in_imgs)
             
         x = self.patch_embed(x) 
         x = self.pos_drop(x) 
@@ -153,7 +154,7 @@ class CMTULIP(TULIP):
             x = layer(x)
 
         x = self.first_patch_expanding(x)
-        x, rh_preds, kl_loss = self.frust_attn(x, bev_feat, lidar2ego_mat)
+        
 
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
@@ -172,18 +173,22 @@ class CMTULIP(TULIP):
             x = rearrange(x, 'B H W C -> B C H W')
 
 
+        x, interm_depth = self.fuser(x, img_feats, lidar2img_rts, img_shapes)
         x = self.decoder_pred(x.contiguous())
-            
         if mc_drop:
             return x
         else:
-            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, kl_loss)
+            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, interm_depth)
             return x, total_loss, pixel_loss, range_head_loss
 
-    def forward_loss(self, pred, target, loss_kl):
-        # range_head_target is normalized by max_range
+    def forward_loss(self, pred, target, rh_preds):
+        # target is normalized by max_range
         loss = (pred - target).abs()
         loss = loss.mean()
+        
+        rh_preds = rh_preds.contiguous()
+        range_head_loss = (rh_preds - target).abs().mean()
+        loss = loss + range_head_loss * self.range_head_weight
         
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
@@ -192,7 +197,7 @@ class CMTULIP(TULIP):
         
         # loss+=loss_kl
 
-        return loss, pixel_loss, loss_kl
+        return loss, pixel_loss, range_head_loss
     
     
     def gaussian_bins_targets(self, gt_depth, bin_size=0.8, rmax=51.2, sigma_bins=1.0):
