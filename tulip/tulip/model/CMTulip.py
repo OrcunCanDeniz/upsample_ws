@@ -62,7 +62,7 @@ class CMTULIP(TULIP):
         self.multiview_backbone = ImageBackbone(backbone_config)
         self.load_lss_weights(lss_weights_path)
         self.max_range = 55.0
-        self.fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8)
+        self.fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8, num_layers=2)
         self.range_head_weight = 0.2
         self.decoder_pred = nn.Conv2d(in_channels=backbone_config["img_neck_conf"]["out_channels"], out_channels=1, kernel_size=(1, 1), bias=False)
         
