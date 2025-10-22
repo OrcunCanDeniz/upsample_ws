@@ -3,10 +3,10 @@
 #SBATCH --job-name=CMTULIP_train               # your job name
 #SBATCH --nodes=1                          # 1 node
 #SBATCH --ntasks-per-node=1                # one srun task per node
-#SBATCH --gres=gpu:a40:6               # 8 GPUs on that node
-#SBATCH --cpus-per-task=48                  # CPUs for data loading, etc.
+#SBATCH --gres=gpu:100:8               # 8 GPUs on that node
+#SBATCH --cpus-per-task=128                  # CPUs for data loading, etc.
 #SBATCH --time=24:00:00                    # hh:mm:ss walltime
-#SBATCH --partition=a40                 # GPU partition
+#SBATCH --partition=a100                 # GPU partition
 # (no --output/--error here—handled by srun instead)
 
 # Paths (adjust to your environment)
@@ -33,6 +33,7 @@ BIND_LIST="${CODE_DIR}:${CONTAINER_WS},${DATA_DIR}:${CONTAINER_WS}/data,${TMPDIR
 export WANDB_API_KEY="$(< "${HOME}/.wandb_key")"
 export http_proxy="http://proxy.nhr.fau.de:80"
 export https_proxy="http://proxy.nhr.fau.de:80"
+export SSL_CERT_FILE=${HOME}/cacert.pem
 
 # Launch training, capturing stdout/err into node-local files
 # srun \
@@ -43,6 +44,7 @@ export https_proxy="http://proxy.nhr.fau.de:80"
     --env WANDB_API_KEY="${WANDB_API_KEY}" \
     --env http_proxy="${http_proxy}" \
     --env https_proxy="${https_proxy}" \
+    --env SSL_CERT_FILE="${SSL_CERT_FILE}" \
     "${SIF_IMAGE}" \
      bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 &&  cd ${CODE_DIR} && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"'
         # --cfg-options dist_params.backend=gloo \
