@@ -64,7 +64,7 @@ keep_close_scan: false
 keep_far_scan: false
 
 # Training configuration
-batch_size: 8  # From bash script
+batch_size: 24  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
@@ -90,10 +90,10 @@ noise_threshold: 0.03
 grid_size: 0.1
 
 # Logging and monitoring
-wandb_disabled: true
+wandb_disabled: false
 entity: 'pnp_dnp'
 project_name: 'upsample'
-run_name: 'cmtulip_base_nusc'
+run_name: 'bevforemr_cmtulip'
 
 # Device configuration
 device: 'cuda'

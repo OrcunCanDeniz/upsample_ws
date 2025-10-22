@@ -1,5 +1,5 @@
 #!/bin/bash -l 
-#
+#SBATCH --export=ALL
 #SBATCH --job-name=CMTULIP_train               # your job name
 #SBATCH --nodes=1                          # 1 node
 #SBATCH --ntasks-per-node=1                # one srun task per node
@@ -28,33 +28,42 @@ mkdir -p "${SLURM_LOGS_DIR}" "${NODE_LOCAL_ARTEFACTS_DIR}" "${LOCAL_ARTEFACTS_DI
 cd "${CODE_DIR}"
 
 # Bind code, data—and also the node‐local scratch—into the container
-BIND_LIST="${CODE_DIR}:${CONTAINER_WS},${DATA_DIR}:${CONTAINER_WS}/data,${TMPDIR}:${TMPDIR}"
+BIND_LIST="${CODE_DIR}:${CONTAINER_WS},${DATA_DIR}:${CONTAINER_WS}/data/nuscenes,${TMPDIR}:${TMPDIR}"
 
-export WANDB_API_KEY="$(< "${HOME}/.wandb_key")"
+# CA on host, resolve the real file, bind to a fixed path in the container
+export HOST_CA_LINK="/etc/pki/tls/certs/ca-bundle.crt"
+export HOST_CA_REAL="$(readlink -f "$HOST_CA_LINK")"
+export IN_CA="/opt/ssl/cacert.pem"
+BIND_LIST="${BIND_LIST},${HOST_CA_REAL}:${IN_CA}"
+
+# Proxies
 export http_proxy="http://proxy.nhr.fau.de:80"
 export https_proxy="http://proxy.nhr.fau.de:80"
-export SSL_CERT_FILE=${HOME}/cacert.pem
+export no_proxy="localhost,127.0.0.1,.nhr.fau.de"
 
-# Launch training, capturing stdout/err into node-local files
-# srun \
-#   --output="${SLURM_LOGS_DIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out" \
-#   --error ="${SLURM_LOGS_DIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" \
-  apptainer exec --nv \
-    --bind "${BIND_LIST}" \
-    --env WANDB_API_KEY="${WANDB_API_KEY}" \
-    --env http_proxy="${http_proxy}" \
-    --env https_proxy="${https_proxy}" \
-    --env SSL_CERT_FILE="${SSL_CERT_FILE}" \
-    "${SIF_IMAGE}" \
-     bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 &&  cd ${CODE_DIR} && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"'
-        # --cfg-options dist_params.backend=gloo \
-# Stage back your model outputs
+# Point clients to the CA inside the container
+export SSL_CERT_FILE="$IN_CA"
+export REQUESTS_CA_BUNDLE="$IN_CA"
+export CURL_CA_BUNDLE="$IN_CA"
+export GIT_SSL_CAINFO="$IN_CA"
+
+# Forward into container
+export SINGULARITYENV_http_proxy="$http_proxy"
+export SINGULARITYENV_https_proxy="$https_proxy"
+export SINGULARITYENV_no_proxy="$no_proxy"
+export SINGULARITYENV_SSL_CERT_FILE="$SSL_CERT_FILE"
+export SINGULARITYENV_REQUESTS_CA_BUNDLE="$REQUESTS_CA_BUNDLE"
+export SINGULARITYENV_CURL_CA_BUNDLE="$CURL_CA_BUNDLE"
+export SINGULARITYENV_GIT_SSL_CAINFO="$GIT_SSL_CAINFO"
+export SINGULARITYENV_WANDB_API_KEY="$(< "${HOME}/.wandb_key")"
+export SINGULARITYENV_CODE_DIR="$CONTAINER_WS"
+
+# Training
+apptainer exec --nv \
+  --bind "${BIND_LIST}" \
+  "${SIF_IMAGE}" \
+  bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 && cd "$CODE_DIR" && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"'
+
 cp -r "${NODE_LOCAL_ARTEFACTS_DIR}" "${LOCAL_ARTEFACTS_DIR}/"
-
-# And copy the captured logs into the same directory
 cp "${SLURM_LOGS_DIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out"  "${LOCAL_ARTEFACTS_DIR}/${SLURM_JOB_ID}/"
 cp "${SLURM_LOGS_DIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err"  "${LOCAL_ARTEFACTS_DIR}/${SLURM_JOB_ID}/"
-
-
-
-
