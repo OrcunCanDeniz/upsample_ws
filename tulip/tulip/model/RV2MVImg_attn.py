@@ -66,7 +66,7 @@ class FFN(nn.Module):
 
 class RV2MVImgAttn(nn.Module):
     def __init__(self, C_rv, rmax, embed_dims=128, 
-                 msda_points=8, num_cams=6, num_levels=4, num_layers=1,
+                 msda_points=8, num_cams=6, num_levels=4, num_layers=1, im2col_step=256,
                  num_q_w=1, num_q_h=1, dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024)):
         super().__init__()
         self.C_rv = C_rv
@@ -94,8 +94,13 @@ class RV2MVImgAttn(nn.Module):
         for _ in range(num_layers):
             self.cross_modal_sca_layers.append(
                 CrossModalSCA(embed_dims=embed_dims, msda_points=msda_points, 
-                                num_cams=num_cams, num_levels=num_levels, dropout=dropout)
-                )
+                                num_cams=num_cams, num_levels=num_levels, dropout=dropout,
+                                deformable_attention=dict(
+                                                            type='MSDeformableAttention3D',
+                                                            embed_dims=embed_dims,
+                                                            num_levels=4,
+                                                            im2col_step=im2col_step))
+                                                        )
         
         self.num_q_per_latent_cell = num_q_w * num_q_h
 
