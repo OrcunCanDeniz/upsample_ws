@@ -62,9 +62,9 @@ class CMTULIP(TULIP):
         self.multiview_backbone = ImageBackbone(backbone_config)
         self.load_lss_weights(lss_weights_path)
         self.max_range = 55.0
-        self.fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8, num_layers=2, im2col_step=im2col_step)
+        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, im2col_step=im2col_step, in_rv_size=(4,128))
+        self.dec_fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8, num_layers=2, im2col_step=im2col_step, in_rv_size=(32,1024))
         self.range_head_weight = 0.2
-        self.decoder_pred = nn.Conv2d(in_channels=backbone_config["img_neck_conf"]["out_channels"], out_channels=1, kernel_size=(1, 1), bias=False)
         
     
     def load_lss_weights(self, lss_weights_path, strict=False):
@@ -144,6 +144,7 @@ class CMTULIP(TULIP):
 
 
     def forward(self, x, in_imgs, lidar2img_rts, img_shapes, target, mc_drop = False):
+        interm_depths = []
         img_feats = self.multiview_backbone(in_imgs)
             
         x = self.patch_embed(x) 
@@ -152,9 +153,15 @@ class CMTULIP(TULIP):
         for i, layer in enumerate(self.layers):
             x_save.append(x)
             x = layer(x)
+            if i == 0:
+                fuser_in = x.permute(0,3,1,2).contiguous()  # B, C, H, W
+                x, interm_depth_enc = self.enc_fuser(fuser_in, img_feats, 
+                                                           lidar2img_rts, img_shapes,
+                                                           return_nhwc=True)
+                interm_depths.append(interm_depth_enc)
 
         x = self.first_patch_expanding(x)
-        
+        # maybe fuse here too, x shape : 32, 2, 64, 384
 
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
@@ -172,22 +179,22 @@ class CMTULIP(TULIP):
             x = self.final_patch_expanding(x)
             x = rearrange(x, 'B H W C -> B C H W')
 
-
-        x, interm_depth = self.fuser(x, img_feats, lidar2img_rts, img_shapes)
+        x, interm_depth_dec = self.dec_fuser(x, img_feats, lidar2img_rts, img_shapes)
+        interm_depths.append(interm_depth_dec)
         x = self.decoder_pred(x.contiguous())
         if mc_drop:
             return x
         else:
-            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, interm_depth)
+            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, interm_depths)
             return x, total_loss, pixel_loss, range_head_loss
 
-    def forward_loss(self, pred, target, rh_preds):
+    def forward_loss(self, pred, target, interm_depth_preds):
         # target is normalized by max_range
+        interm_d_tensor = torch.cat(interm_depth_preds, dim=1)  # [B, n_heads, H, W]
         loss = (pred - target).abs()
         loss = loss.mean()
         
-        rh_preds = rh_preds.contiguous()
-        range_head_loss = (rh_preds - target).abs().mean()
+        range_head_loss = (interm_d_tensor - target).abs().mean()
         loss = loss + range_head_loss * self.range_head_weight
         
         if self.log_transform:

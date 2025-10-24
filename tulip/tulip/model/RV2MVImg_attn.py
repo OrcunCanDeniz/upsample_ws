@@ -72,13 +72,15 @@ class FFN(nn.Module):
 class RV2MVImgAttn(nn.Module):
     def __init__(self, C_rv, rmax, embed_dims=128, 
                  msda_points=8, num_cams=6, num_levels=4, num_layers=1, im2col_step=256,
-                 num_q_w=1, num_q_h=1, dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024)):
+                 dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024)):
         super().__init__()
         self.C_rv = C_rv
         self.rmax = rmax
         self.msda_points = msda_points
         self.num_cams = num_cams
         self.embed_dims = embed_dims
+        self.in_Hrv, self.in_Wrv = in_rv_size
+        self.og_Hrv, self.og_Wrv = og_rv_size
         
         self.ref_pts_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax, 
                                                       in_rv_size=in_rv_size,
@@ -91,9 +93,9 @@ class RV2MVImgAttn(nn.Module):
         )
         
         self.proj_out = nn.Sequential(
-            nn.Conv2d(embed_dims, embed_dims, 1, bias=True), 
+            nn.Linear(embed_dims, embed_dims), 
             nn.GELU(),
-            nn.Conv2d(embed_dims, embed_dims, 1, bias=True)
+            nn.Linear(embed_dims, C_rv)
         )
         
         self.cross_modal_sca_layers = nn.ModuleList()
@@ -107,9 +109,13 @@ class RV2MVImgAttn(nn.Module):
                                                             num_levels=4,
                                                             im2col_step=im2col_step))
                                                         )
+        n_q_h = self.ref_pts_generator.n_q_h
+        n_q_w = self.ref_pts_generator.n_q_w
+        self.num_q_per_latent_cell = n_q_h * n_q_w
         
-        self.num_q_per_latent_cell = num_q_w * num_q_h
-
+        if self.num_q_per_latent_cell > 1:
+        # conditional instantiation bc ddp will complain about unused parameters otherwise
+            self.query_aggregate = nn.Conv2d(C_rv, C_rv, kernel_size=(n_q_h, n_q_w), stride=(n_q_h, n_q_w))
 
     # This function must use fp32!!!
     @force_fp32(apply_to=('points_lidar', 'lidar2img', 'img_shapes'))
@@ -151,7 +157,7 @@ class RV2MVImgAttn(nn.Module):
 
         return reference_points_cam, mask
     
-    def forward(self, in_rv_feat, img_feats, lidar2img_rts, img_shapes):
+    def forward(self, in_rv_feat, img_feats, lidar2img_rts, img_shapes, return_nhwc=False):
         """
         Fuses range-view (RV) tokens with multi-view image features using SpatialCrossAttention.
 
@@ -167,33 +173,37 @@ class RV2MVImgAttn(nn.Module):
         Returns:
             fused_rv: Tensor [B, Hrv, Wrv, C_rv]  # same layout as rv_feat if input was NHWC; otherwise returns NHWC.
         """
-
-        rv_feat = self.proj_q(in_rv_feat)
-        B, C_rv, Hrv, Wrv = rv_feat.shape
-
-        points_lidar, interm_depths, _ = self.ref_pts_generator(in_rv_feat)
+        B, in_C, in_Hrv, in_Wrv = in_rv_feat.shape # range view latent size
+        points_lidar, interm_depths, rv_feat = self.ref_pts_generator(in_rv_feat, ret_feats=True)
+        rv_feat = self.proj_q(rv_feat)
 
         reference_points_cam, mask = self.point_sampling(points_lidar, lidar2img_rts, img_shapes)
-        
-        #   reference_points_cam: [B, num_cam, N, 1, 2]  (N=Hrv*Wrv*self.num_q_per_latent_cell)
+        #   reference_points_cam: [B, num_cam, N, 1, 2]  (N=ogHrv*ogWrv)
         #   mask:                [B, num_cam, N, 1]
-        # SpatialCrossAttention expects [num_cam, B, N, K, 2] and mask [num_cam, B, N, K]
+        # SpatialCrossAttention expects [num_cam, B, N, K, 2] and mask [num_cam, B, N, K] K=1 for us
         reference_points_cam = reference_points_cam.permute(1, 0, 2, 3, 4).contiguous()
         
         mask = mask.permute(1, 0, 2, 3).contiguous()   # keep last singleton (K=1)
 
         # attend per-latent-sample; if created multiple latent samples per RV cell flatten them here.
         query = rv_feat.flatten(2).transpose(1, 2)  # [B, N, C_rv], N must equal N used in point_sampling
-        if self.num_q_per_latent_cell > 1:
-            query = query.repeat_interleave(self.num_q_per_latent_cell, dim=1)  # [B, H*W*Q, C]
-        
-        
+       
         for layer in self.cross_modal_sca_layers:
             query = layer(query, img_feats, reference_points_cam, mask)
         
-        query = query.view(B, self.embed_dims, Hrv, Wrv)
+        # query is in shape [B, N, C_rv]
         fused = self.proj_out(query)
-
+        
+        if self.num_q_per_latent_cell > 1:
+            fused = fused.transpose(1, 2).view(B, self.C_rv, self.og_Hrv, self.og_Wrv)
+            fused = self.query_aggregate(fused)  # [B, inC_rv, inHrv, inWrv]
+            fused = fused.permute(0,2,3,1).contiguous()  # [B, inHrv, inWrv, inC_rv]
+        else:
+            fused = fused.view(B, self.og_Hrv, self.og_Wrv, self.C_rv) # [B, inHrv, inWrv, inC_rv]
+            
+        if not return_nhwc:
+            fused = fused.permute(0,3,1,2).contiguous()  # [B, inC_rv, inHrv, inWrv]
+                
         return fused, interm_depths
 
 
