@@ -14,7 +14,12 @@ import pdb
 
 
 class CrossModalSCA(nn.Module):
-    def __init__(self, embed_dims=128, msda_points=8, num_cams=6, dropout=0.1, num_levels=4):
+    def __init__(self, embed_dims=128, msda_points=8, num_cams=6, dropout=0.1, num_levels=4, 
+                 deformable_attention = dict( type='MSDeformableAttention3D',
+                                                embed_dims=256,
+                                                num_levels=4,
+                                                im2col_step=256)
+                    ):
         super().__init__()
         self.embed_dims = embed_dims
         self.msda_points = msda_points
@@ -22,7 +27,7 @@ class CrossModalSCA(nn.Module):
         self.dropout = dropout
         
         norm1_name, self.norm1 = build_norm_layer(dict(type='LN'), num_features=embed_dims)
-        self.spatial_cross_attention = SpatialCrossAttention(num_cams=num_cams, embed_dims=embed_dims, num_levels=4)
+        self.spatial_cross_attention = SpatialCrossAttention(num_cams=num_cams, embed_dims=embed_dims, num_levels=4, deformable_attention=deformable_attention)
         self.dropout1 = nn.Dropout(dropout)
         norm2_name, self.norm2 = build_norm_layer(dict(type='LN'), num_features=embed_dims)
         self.ffn = FFN(embed_dims, embed_dims)
