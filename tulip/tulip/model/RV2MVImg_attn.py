@@ -80,8 +80,9 @@ class RV2MVImgAttn(nn.Module):
         self.num_cams = num_cams
         self.embed_dims = embed_dims
         
-        self.ref_pts_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax, nqw=num_q_w, nqh=num_q_h, 
-                                                      in_rv_size=in_rv_size, og_rv_size=og_rv_size)
+        self.ref_pts_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax, 
+                                                      in_rv_size=in_rv_size,
+                                                      og_rv_size=og_rv_size)
 
         self.proj_q = nn.Sequential(
             nn.Conv2d(C_rv, embed_dims, 1, bias=True), 
@@ -170,7 +171,7 @@ class RV2MVImgAttn(nn.Module):
         rv_feat = self.proj_q(in_rv_feat)
         B, C_rv, Hrv, Wrv = rv_feat.shape
 
-        points_lidar, interm_depths = self.ref_pts_generator(in_rv_feat)
+        points_lidar, interm_depths, _ = self.ref_pts_generator(in_rv_feat)
 
         reference_points_cam, mask = self.point_sampling(points_lidar, lidar2img_rts, img_shapes)
         
