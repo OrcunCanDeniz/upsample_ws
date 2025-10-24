@@ -13,12 +13,47 @@ from mmcv.ops.multi_scale_deform_attn import MultiScaleDeformableAttention as MS
 import pdb
 
 
+class BEV_MSDA(nn.Module):
+    def __init__(self, embed_dims=d, num_heads=n_heads,
+                        num_levels=1, num_points=6,
+                        batch_first=True):
+        super().__init__()
+        
+        self.msda = MSDA(embed_dims=d,
+                         num_heads=n_heads,
+                         num_levels=num_levels,
+                         num_points=num_points,
+                         batch_first=True)
+         
+        self.add_norm = nn.LayerNorm(d)
+        self.ffn = nn.Sequential(
+            nn.Linear(d, d),
+            nn.GELU(),
+            nn.Linear(d, d)
+        )
+        self.ffn_norm = nn.LayerNorm(d)
+        
+    def forward(self, query, value, reference_points, spatial_shapes, level_start_index):
+        
+        with torch.cuda.amp.autocast(enabled=False):
+            y_msda = self.msda(query=query,
+                                reference_points=reference_points,
+                                value=value,
+                                spatial_shapes=spatial_shapes,
+                                level_start_index=level_start_index,
+                                key_padding_mask=None)
+            
+        y = self.add_norm(y_msda + query)
+        y_ffn = self.ffn(y)
+        y = self.ffn_norm(y_ffn + y)
+        
+        return y
+
+
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, d=128,
-                 rmax=51.2, # K is removed, we use the full distribution
-                 bin_size=0.8, bev_extent=(-51.2,51.2,-51.2,51.2),
-                 n_heads=8,
-                 msda_points=6,
+                 n_heads=8, msda_points=6, num_msda=1,
+                 rmax=51.2, bin_size=0.8, bev_extent=(-51.2,51.2,-51.2,51.2),
                  rv_size=(2,64),
                  og_rv_size=(32,1024)
                  ):
@@ -30,36 +65,22 @@ class RV2BEVFrustumAttn(nn.Module):
         self.n_heads = n_heads
         self.msda_points = msda_points
 
-        self.num_q_w = 4
-        self.num_q_h = 4
-        self.num_q_per_latent_cell = self.num_q_w * self.num_q_h
-
         # Projections
-        self.proj_q = nn.Conv2d(C_rv, d, 1, bias=True)
+        self.proj_q = nn.Conv2d(d, d, 1, bias=True)
         self.proj_v = nn.Conv2d(C_bev, d, 1, bias=True)
-        self.proj_o =  nn.Sequential(
-            nn.Conv2d(self.d*self.num_q_per_latent_cell, C_rv*2, 1, bias=True),
-            nn.GELU(),
-            nn.Conv2d(C_rv*2, C_rv, 1, bias=True)
-        )
+        self.proj_o = nn.Conv2d(d, C_rv, 1, bias=True)
         
         self.query_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax,
-                                                          nqw=self.num_q_w, nqh=self.num_q_h,
-                                                          in_rv_size=rv_size, og_rv_size=og_rv_size)
+                                                    in_rv_size=rv_size, 
+                                                    og_rv_size=og_rv_size)
         
-        self.msda = MSDA(embed_dims=d,
-                         num_heads=n_heads,
-                         num_levels=1,
-                         num_points=6,
-                         batch_first=True)
-        
-        self.add_norm = nn.LayerNorm(C_rv)
-        self.ffn_norm = nn.LayerNorm(C_rv)
-        self.ffn = nn.Sequential(
-            nn.Linear(C_rv, C_rv),
-            nn.GELU(),
-            nn.Linear(C_rv, C_rv)
-        )
+        self.msda_layers = nn.ModuleList()
+        for l in range(num_msda):
+            self.msda_layers.append(
+                    BEV_MSDA(embed_dims=self.d, num_heads=self.n_heads,
+                                num_levels=1, num_points=msda_points,
+                                batch_first=True)
+                )
 
         pe = self.build_sinusoidal_bev_pe(H=128, W=128, C=d, device='cpu')
         self.register_buffer("bev_pe", pe, persistent=False)
@@ -87,12 +108,11 @@ class RV2BEVFrustumAttn(nn.Module):
         x_rv = x_rv.permute(0, 3, 1, 2).contiguous()
 
         # Projections
-        Q0   = self.proj_q(x_rv).permute(0,2,3,1)
         Vmap = self.proj_v(bev)
         Vmap = Vmap + self.bev_pe
 
-        p_ego_h, depth_logits = self.query_generator(x_rv, lidar2ego_mat)
-
+        p_ego_h, depth_logits, rv_feats = self.query_generator(x_rv, lidar2ego_mat, ret_feats=True)
+        Q0 = self.proj_q(rv_feats).permute(0,2,3,1) # [BHWC]
         # Splat onto BEV plane and normalize to get reference points
         x_ego = p_ego_h[..., 0]
         y_ego = p_ego_h[..., 1]
@@ -100,11 +120,10 @@ class RV2BEVFrustumAttn(nn.Module):
         ry = (y_ego - self.ymin) / (self.ymax - self.ymin)
         # Stack coordinates into the last dimension
         ref = torch.stack([rx.clamp(0, 1), ry.clamp(0, 1)], dim=-1)
-        ref = ref.view(B, Hrv * Wrv *self.num_q_per_latent_cell, 2)
+        ref = ref.view(B, -1, 2) # [B, len_q, 2]
         
         # Flatten query and value for MSDA
-        query = Q0.unsqueeze(3).expand(B, Hrv, Wrv, self.num_q_per_latent_cell, self.d)          # [B, Hrv, Wrv, P, d]
-        query = query.reshape(B, -1, self.d).contiguous()                 # [B, Len_q_pts, d]
+        query = query.flatten(B, -1, self.d).contiguous() # [B, Len_q_pts, d]
 
         reference_points = ref.reshape(B, -1, 2)                     # [B, Len_q_pts, 2]
         reference_points = reference_points.unsqueeze(2)       # [B, Len_q_pts, 1, 1, 2]
@@ -117,20 +136,14 @@ class RV2BEVFrustumAttn(nn.Module):
         spatial_shapes = torch.as_tensor([[Hbev, Wbev]], device=bev.device, dtype=torch.long)
         level_start_index = torch.as_tensor([0], device=bev.device, dtype=torch.long)
 
-        with torch.cuda.amp.autocast(enabled=False):
-            y_msda = self.msda(query=query,
-                                reference_points=reference_points,
-                                value=value,
-                                spatial_shapes=spatial_shapes,
-                                level_start_index=level_start_index,
-                                key_padding_mask=None)
-        # Reshape output back to image format
-        y_msda = y_msda.transpose(1, 2).contiguous().view(B, -1, Hrv, Wrv)
-        y_msda = self.proj_o(y_msda) # to reshape to C_rv
-        y = y_msda + x_rv
-        y = self.add_norm(y.permute(0,2,3,1))
-        y_ffn = self.ffn(y)
-        y = self.ffn_norm(y_ffn + y)
+        for msda_layer in msda_layers:
+            query = msda_layer(query, 
+                               value, 
+                               reference_points, 
+                               spatial_shapes, 
+                               level_start_index)
+
+        y = self.proj_o(query)
         
         y = y.contiguous()
 
