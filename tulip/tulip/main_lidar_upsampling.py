@@ -177,11 +177,12 @@ def main(args):
             sampler_train = torch.utils.data.DistributedSampler(
                 dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
             )
+            print("Sampler_train = %s" % str(sampler_train))
         else: 
             # Validation set uses only one rank to write the summary
             sampler_val = torch.utils.data.DistributedSampler(
                     dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-            print("Sampler_train = %s" % str(sampler_train))
+            print("Sampler_val = %s" % str(sampler_val))
     else:
         if not args.eval:
             sampler_train = torch.utils.data.RandomSampler(dataset_train)
