@@ -7,6 +7,7 @@
 #SBATCH --cpus-per-task=128                  # CPUs for data loading, etc.
 #SBATCH --time=24:00:00                    # hh:mm:ss walltime
 #SBATCH --partition=a100                 # GPU partition
+#SBATCH -C a100_80
 # (no --output/--error here—handled by srun instead)
 
 # Paths (adjust to your environment)
@@ -48,15 +49,15 @@ export CURL_CA_BUNDLE="$IN_CA"
 export GIT_SSL_CAINFO="$IN_CA"
 
 # Forward into container
-export SINGULARITYENV_http_proxy="$http_proxy"
-export SINGULARITYENV_https_proxy="$https_proxy"
-export SINGULARITYENV_no_proxy="$no_proxy"
-export SINGULARITYENV_SSL_CERT_FILE="$SSL_CERT_FILE"
-export SINGULARITYENV_REQUESTS_CA_BUNDLE="$REQUESTS_CA_BUNDLE"
-export SINGULARITYENV_CURL_CA_BUNDLE="$CURL_CA_BUNDLE"
-export SINGULARITYENV_GIT_SSL_CAINFO="$GIT_SSL_CAINFO"
-export SINGULARITYENV_WANDB_API_KEY="$(< "${HOME}/.wandb_key")"
-export SINGULARITYENV_CODE_DIR="$CONTAINER_WS"
+export APPTAINERENV_http_proxy="$http_proxy"
+export APPTAINERENV_https_proxy="$https_proxy"
+export APPTAINERENV_no_proxy="$no_proxy"
+export APPTAINERENV_SSL_CERT_FILE="$SSL_CERT_FILE"
+export APPTAINERENV_REQUESTS_CA_BUNDLE="$REQUESTS_CA_BUNDLE"
+export APPTAINERENV_CURL_CA_BUNDLE="$CURL_CA_BUNDLE"
+export APPTAINERENV_GIT_SSL_CAINFO="$GIT_SSL_CAINFO"
+export APPTAINERENV_WANDB_API_KEY="$(< "${HOME}/.wandb_key")"
+export APPTAINERENV_CODE_DIR="$CONTAINER_WS"
 
 # Training
 apptainer exec --nv \
