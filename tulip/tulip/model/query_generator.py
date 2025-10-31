@@ -158,7 +158,7 @@ class SimpleQueryGenerator(nn.Module):
         assert H_lrv == self.in_Hrv and W_lrv == self.in_Wrv, f"Input range view latent size {H_lrv}x{W_lrv} does not match expected size {self.in_Hrv}x{self.in_Wrv}"
         assert Crv == self.C_rv, f"in C {Crv} != expected C {self.C_rv}"
         
-        x_ret = None
+        x_ret = x_rv.clone() if ret_feats else None
         if self.num_q_per_latent_cell >1:
             x_rv = self.spatial_expand(x_rv)
             x_ret = x_rv.clone() if ret_feats else None
