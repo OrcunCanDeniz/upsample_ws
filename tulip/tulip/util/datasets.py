@@ -281,17 +281,16 @@ class RVWithImageDataset(Dataset):
     def img_transform(self, img):
         W, H = img.size
         fH, fW = self.final_dim
-        resize = max(fH / H, fW / W)
-        resize_dims = (int(W * resize), int(H * resize))
-        newW, newH = resize_dims
-        crop_h = int(newH) - fH
-        crop_w = int(max(0, newW - fW) / 2)
-        crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
+        
+        if H == fH and W == fW:
+            return img, 1.0
+        
+        resize_scale = max(fH / H, fW / W)
+        resize_dims = (int(W * resize_scale), int(H * resize_scale))
         
         # adjust image
         img = img.resize(resize_dims)
-
-        return img
+        return img, resize_scale
         
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
         return [""], {"":0}
@@ -344,7 +343,7 @@ class RVWithImageDataset(Dataset):
                 intrin_mat[:3, :3] = np.array(
                     cam_info[cam]['calibrated_sensor']['camera_intrinsic'])
 
-                img = self.img_transform(img)
+                img, scale = self.img_transform(img)
                 
                 lidar2cam_r = np.linalg.inv(cam_info[cam]['sensor2lidar_rotation'])
                 lidar2cam_t = cam_info[
@@ -353,6 +352,13 @@ class RVWithImageDataset(Dataset):
                 lidar2cam_rt[:3, :3] = lidar2cam_r.T
                 lidar2cam_rt[3, :3] = -lidar2cam_t
                 lidar2img_rt = (intrin_mat @ lidar2cam_rt.T)
+                
+                if scale != 1.0:
+                    scale_factor = np.eye(4)
+                    scale_factor[0, 0] *= scale
+                    scale_factor[1, 1] *= scale
+                    lidar2img_rt = scale_factor @ lidar2img_rt
+
                 lidar2img_rts.append(torch.from_numpy(lidar2img_rt).float())
                 lidar2cam_rts.append(torch.from_numpy(lidar2cam_rt).float())
                 
@@ -458,7 +464,7 @@ def collate_fn(data):
             img_shape,
             sample_token,
         ) = iter_data
-        
+
         
         imgs_batch.append(sweep_imgs)
         lr_rv_samples_batch.append(lr_rv_sample)
@@ -466,11 +472,11 @@ def collate_fn(data):
         sweep_lidar2img_rts_batch.append(sweep_lidar2img_rts)
         img_shapes_batch.append(img_shape)
     ret_list = [
-        torch.stack(imgs_batch),
-        torch.stack(lr_rv_samples_batch),
-        torch.stack(hr_rv_samples_batch),
-        torch.stack(sweep_lidar2img_rts_batch),
-        torch.stack(img_shapes_batch),
+        torch.stack(imgs_batch).contiguous(),
+        torch.stack(lr_rv_samples_batch).contiguous(),
+        torch.stack(hr_rv_samples_batch).contiguous(),
+        torch.stack(sweep_lidar2img_rts_batch).contiguous(),
+        torch.stack(img_shapes_batch).contiguous(),
     ]
 
     return ret_list
@@ -573,7 +579,13 @@ def build_nuscenes_w_image_upsampling_dataset(is_train, log_transform = False):
     
     info_file = "nuscenes_upsample_infos_train.pkl" if is_train else "nuscenes_upsample_infos_val.pkl"
 
-    nusc_root = "./data/nuscenes"
+    tmp_dir = os.environ.get("TMPDIR")
+    use_work_dir = os.environ.get("USE_WORK", "0")
+    if tmp_dir is not None and use_work_dir != "1":
+        nusc_root = os.path.join(tmp_dir, "nusc_dataset")
+    else:
+        nusc_root = "./data/nuscenes"
+    print("Nuscenes root directory:", nusc_root)
     dset = RVWithImageDataset(nusc_root, high_res_transform = transform_high_res, low_res_transform = transform_low_res, info_file = info_file)
 
     return dset
