@@ -20,7 +20,9 @@ from matplotlib.patches import Circle
 import cv2
 import pdb
 # Add the parent directory to the path to import from tulip
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
+sys.path.insert(0, parent_dir)
 
 from tulip.util.datasets import (
     RVWithImageDataset,
@@ -175,23 +177,6 @@ def denormalize_image(img_tensor, img_mean, img_std, to_rgb=True):
     return img
 
 
-def apply_ida_to_pixels(pixels_xy: np.ndarray, ida_mat: torch.Tensor) -> np.ndarray:
-    """
-    Apply image resize/crop (IDA) transform to pixel coordinates to match displayed images.
-    pixels_xy: (N,2) in original image pixel coordinates.
-    ida_mat: 4x4 tensor returned by dataset (scale + translation in top-left 2x2 and [:2,3]).
-    Returns (N,2) transformed pixel coordinates.
-    """
-    if pixels_xy.size == 0:
-        return pixels_xy
-    ones = np.ones((pixels_xy.shape[0], 1), dtype=np.float32)
-    # Build 4D homogeneous with z=1, w=1 to be consistent with ida layout
-    pix_h = np.concatenate([pixels_xy.astype(np.float32), np.ones((pixels_xy.shape[0], 1), np.float32), ones], axis=1)
-    ida = ida_mat.cpu().numpy().astype(np.float32)
-    pix_tf = pix_h @ ida.T
-    return pix_tf[:, :2]
-
-
 def render_with_nuscenes_devkit(nusc: 'NuScenes', sample_token: str, cam_name: str):
     """
     Render point cloud projection using nuScenes render_pointcloud_in_image.
@@ -215,11 +200,11 @@ def visualize_projections(sample_data, dataset, sample_idx):
         dataset: RVWithImageDataset instance
         sample_idx: Index of the sample
     """
-    # Unpack sample data - updated to match new structure
-    (sweep_imgs, sweep_sensor2ego_mats, sweep_intrins, sweep_ida_mats,
-     sweep_sensor2sensor_mats, bda_mat, sweep_timestamps, sweep_lidar2img_rts,
-     sweep_lidar2cam_rts, img_metas, low_res_rv, high_res_rv, lidar2ego_mat, 
-     mask_sample, range_head_target) = sample_data
+    # Unpack sample data returns 10 items:
+    # sweep_imgs, sweep_intrins, sweep_lidar2img_rts, sweep_lidar2cam_rts,
+    # low_res_rv, high_res_rv, lidar2ego_mat, mask_sample, img_shape, sample_token
+    (sweep_imgs, sweep_intrins, sweep_lidar2img_rts, sweep_lidar2cam_rts,
+     low_res_rv, high_res_rv, lidar2ego_mat, mask_sample, img_shape, sample_token) = sample_data
     
     # Get camera names
     cam_names = dataset.cam_names
@@ -247,7 +232,9 @@ def visualize_projections(sample_data, dataset, sample_idx):
         return
     
 
-    # nusc = NuScenes(version='v1.0-trainval', dataroot=dataset.data_root, verbose=False)
+    use_devkit = False
+    if use_devkit:
+        nusc = NuScenes(version='v1.0-trainval', dataroot=dataset.data_root, verbose=False)
     imgs = []
     
     # Collect all lidar2img matrices and image shapes for batched processing
@@ -264,16 +251,16 @@ def visualize_projections(sample_data, dataset, sample_idx):
         imgs.append(img)
         
         # Collect lidar2img matrix and image shape
-        lidar2img_matrix = sweep_lidar2img_rts[0, cam_idx].numpy()
+        lidar2img_matrix = sweep_lidar2img_rts[cam_idx].numpy()
         lidar2img_matrices.append(lidar2img_matrix)
         img_shapes.append(img.shape[:2])
         
-        print(f'{img_metas["token"]}')
+        print(f'{sample_token}')
         # nuScenes devkit projection for comparison (overlay cyan x)
         dev_xy = np.zeros((0, 2), dtype=np.float32)
-        if False:
+        if use_devkit:
             print("Using nuScenes devkit")
-            sample = nusc.get('sample', img_metas['token'])
+            sample = nusc.get('sample', sample_token)
             
             cam_sd_token = sample['data'][cam_name]
             lidar_sd_token = sample['data']['LIDAR_TOP']
@@ -334,7 +321,7 @@ def visualize_projections(sample_data, dataset, sample_idx):
         ax.set_xticks([])
         ax.set_yticks([])
     # Add overall title
-    fig.suptitle(f'Lidar Point Projections - Sample {img_metas["token"][:8]}', 
+    fig.suptitle(f'Lidar Point Projections - Sample {sample_token[:8]}', 
                  fontsize=16, fontweight='bold')
     
     # Adjust layout
@@ -388,8 +375,8 @@ def main():
     sample_data = dataset[sample_idx]
     
     # Print sample info
-    img_metas = sample_data[9]  # img_metas is at index 9 in new structure
-    print(f"📋 Sample token: {img_metas['token']}")
+    sample_token = sample_data[9]  # sample_token is at index 9 in NuscSCADataset structure
+    print(f"📋 Sample token: {sample_token}")
     
     # Visualize projections
     print("🎨 Creating visualization...")

@@ -62,9 +62,10 @@ class CMTULIP(TULIP):
         self.multiview_backbone = ImageBackbone(backbone_config)
         self.load_lss_weights(lss_weights_path)
         self.max_range = 55.0
-        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, im2col_step=im2col_step, in_rv_size=(4,128))
-        self.dec_fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8, num_layers=2, im2col_step=im2col_step, in_rv_size=(32,1024))
-        self.range_head_weight = 0.2
+        num_img_feat_lvl = backbone_config.img_neck_conf.get('num_outs', 4)
+        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128))
+        self.dec_fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8, num_layers=2, num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(32,1024))
+        self.register_buffer('range_head_weight', torch.tensor(0.2, dtype=torch.float32), persistent=True)
         
     
     def load_lss_weights(self, lss_weights_path, strict=False):

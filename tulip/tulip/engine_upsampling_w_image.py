@@ -61,6 +61,9 @@ def train_one_epoch(model: torch.nn.Module,
     print_freq = 20
 
     accum_iter = args.accum_iter
+    base = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+    if epoch in (5, 10, 50):
+        base.range_head_weight.mul_(0.5)   # Decrease range head weight
 
     optimizer.zero_grad()
 
@@ -172,24 +175,19 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                           'precision':[],
                           'recall':[],
                           'f1':[]}
-
     for batch in tqdm.tqdm(data_loader):
 
-
         cam_imgs = batch[0]
-        mats_dict = batch[1]
-        timestamps = batch[2]
-        img_metas = batch[3]
-        images_low_res = batch[4]
-        images_high_res = batch[5]
-        lidar2ego_mat = batch[6]
+        images_low_res = batch[1]
+        images_high_res = batch[2]
+        lidar2img_rts = batch[3]
+        img_shapes = batch[4]
         
         images_low_res = images_low_res.to(device, non_blocking=True)
         images_high_res = images_high_res.to(device, non_blocking=True)
+        lidar2img_rts = lidar2img_rts.to(device, non_blocking=True)
+        img_shapes = img_shapes.to(device, non_blocking=True)
         cam_imgs = cam_imgs.to(device, non_blocking=True)
-        mats_dict = {k: v.to(device, non_blocking=True) for k, v in mats_dict.items()}
-        timestamps = timestamps.to(device, non_blocking=True)
-        lidar2ego_mat = lidar2ego_mat.to(device, non_blocking=True)
         
         global_step += 1
         # compute output
@@ -200,20 +198,18 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             for i in range(int(np.ceil(iteration / iteration_batch))):
                 input_batch = iteration_batch if (iteration-i*iteration_batch) > iteration_batch else (iteration-i*iteration_batch)
                 test_imgs_input = torch.tile(images_low_res, (input_batch, 1, 1, 1))
-                lidar2ego_mat_batch = torch.tile(lidar2ego_mat, (input_batch, 1, 1))
                 cam_imgs_batch = torch.tile(cam_imgs, (input_batch, 1, 1, 1, 1, 1))
-                mats_dict_batch = {}
-                for k, v in mats_dict.items():
-                    if v.shape[0] == 1 and v.ndim >= 2:
-                        mats_dict_batch[k] = v.repeat(input_batch, *([1] * (v.ndim - 1)))
+                lidar2img_rts_batch = torch.tile(lidar2img_rts, (input_batch, 1, 1, 1))
+                img_shapes_batch = torch.tile(img_shapes, (input_batch, 1))
+
                 # print all input tensors shapes
-                pred_imgs = model(test_imgs_input, cam_imgs_batch, 
-                                mats_dict_batch, timestamps,
-                                target=images_high_res, 
-                                lidar2ego_mat=lidar2ego_mat_batch,
-                                mc_drop = True) 
+                with torch.no_grad():
+                    pred_imgs = model(test_imgs_input, cam_imgs_batch, 
+                                    lidar2img_rts_batch, img_shapes_batch,
+                                    target=images_high_res, 
+                                    mc_drop=True) 
                 
-                pred_img_iteration[i*iteration_batch:i*iteration_batch+input_batch, ...] = pred_imgs
+                pred_img_iteration[i*iteration_batch:i*iteration_batch+input_batch, ...] = pred_imgs[:, 0:1, ...]
             pred_img = torch.mean(pred_img_iteration, dim = 0, keepdim = True)
             pred_img_var = torch.std(pred_img_iteration, dim = 0, keepdim = True)
             noise_removal = pred_img_var > noise_threshold * pred_img
@@ -236,7 +232,7 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "nuscenes_with_image":
-                pred_img = torch.where((pred_img >= 0) & (pred_img <= 55/80), pred_img, 0)
+                pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             
@@ -283,8 +279,8 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pred_img[low_res_index, :] = images_low_res
                 
                 # 3D Evaluation Metrics
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)# max range is 55/80, argument(80) is just denormalization factor
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 55)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 55)
                 
 
             elif args.dataset_select == "kitti":
