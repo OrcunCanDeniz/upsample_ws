@@ -465,11 +465,6 @@ class RVWithImageDataset(Dataset):
         range_mask = np.logical_and(rv_sample >= self.min_range, rv_sample <= self.max_range)
         mask_sample = np.logical_and(mask_sample, range_mask) # pixel should satisfy both range and mask
         # Load precomputed range_head_target from disk instead of computing on-the-fly
-        head_target_rel = sample_info['lidar_info'].get('range_head_target_path')
-        if head_target_rel is None:
-            raise KeyError('range_head_target_path missing in lidar_info')
-        head_target_path = os.path.join(self.data_root, head_target_rel)
-        range_head_target = mdim_npy_loader(head_target_path)[0]
         low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
         
@@ -500,7 +495,6 @@ class RVWithImageDataset(Dataset):
             high_res_rv,
             lidar2ego_mat,
             torch.from_numpy(mask_sample),
-            torch.from_numpy(range_head_target)
         ]
 
         return ret_list
@@ -518,7 +512,6 @@ def collate_fn(data):
     hr_rv_samples_batch = list()
     lidar2ego_mat = None
     mask_samples_batch = list()
-    range_head_targets_batch = list()
     for iter_data in data:
         (
             sweep_imgs,
@@ -533,8 +526,7 @@ def collate_fn(data):
             hr_rv_sample,
             lidar2ego_mat_tmp,
             mask_sample,
-            range_head_target
-        ) = iter_data[:13]
+        ) = iter_data[:12]
         
         if lidar2ego_mat is None:
             lidar2ego_mat = lidar2ego_mat_tmp
@@ -550,7 +542,6 @@ def collate_fn(data):
         lr_rv_samples_batch.append(lr_rv_sample)
         hr_rv_samples_batch.append(hr_rv_sample)
         mask_samples_batch.append(mask_sample)
-        range_head_targets_batch.append(range_head_target)
     mats_dict = dict()
     mats_dict['sensor2ego_mats'] = torch.stack(sensor2ego_mats_batch)
     mats_dict['intrin_mats'] = torch.stack(intrin_mats_batch)
@@ -566,7 +557,6 @@ def collate_fn(data):
         torch.stack(hr_rv_samples_batch),
         torch.from_numpy(lidar2ego_mat).float(),
         torch.stack(mask_samples_batch),
-        torch.stack(range_head_targets_batch)
     ]
 
     return ret_list

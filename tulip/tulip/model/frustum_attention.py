@@ -8,30 +8,30 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 
-from .query_generator import SimpleQueryGenerator, ELEV_DEG_PER_RING_NUCSENES
+from .query_generator import SimpleQueryGenerator
 from mmcv.ops.multi_scale_deform_attn import MultiScaleDeformableAttention as MSDA
 import pdb
 
 
 class BEV_MSDA(nn.Module):
-    def __init__(self, embed_dims=d, num_heads=n_heads,
+    def __init__(self, embed_dims, num_heads,
                         num_levels=1, num_points=6,
                         batch_first=True):
         super().__init__()
         
-        self.msda = MSDA(embed_dims=d,
-                         num_heads=n_heads,
+        self.msda = MSDA(embed_dims=embed_dims,
+                         num_heads=num_heads,
                          num_levels=num_levels,
                          num_points=num_points,
-                         batch_first=True)
+                         batch_first=batch_first)
          
-        self.add_norm = nn.LayerNorm(d)
+        self.add_norm = nn.LayerNorm(embed_dims)
         self.ffn = nn.Sequential(
-            nn.Linear(d, d),
+            nn.Linear(embed_dims, embed_dims),
             nn.GELU(),
-            nn.Linear(d, d)
+            nn.Linear(embed_dims, embed_dims)
         )
-        self.ffn_norm = nn.LayerNorm(d)
+        self.ffn_norm = nn.LayerNorm(embed_dims)
         
     def forward(self, query, value, reference_points, spatial_shapes, level_start_index):
         
@@ -53,25 +53,27 @@ class BEV_MSDA(nn.Module):
 class RV2BEVFrustumAttn(nn.Module):
     def __init__(self, C_rv, C_bev, d=128,
                  n_heads=8, msda_points=6, num_msda=1,
-                 rmax=51.2, bin_size=0.8, bev_extent=(-51.2,51.2,-51.2,51.2),
-                 rv_size=(2,64),
+                 rmax=51.2, bev_extent=(-51.2,51.2,-51.2,51.2),
+                 in_rv_size=(2,64),
                  og_rv_size=(32,1024)
                  ):
         super().__init__()
         self.d = d
         self.rmax = float(rmax)
-        self.bin_size = float(bin_size)
         self.xmin, self.xmax, self.ymin, self.ymax = bev_extent
         self.n_heads = n_heads
         self.msda_points = msda_points
-
+        self.in_Hrv, self.in_Wrv = in_rv_size
+        self.og_Hrv, self.og_Wrv = og_rv_size
+        self.C_rv = C_rv
+        
         # Projections
-        self.proj_q = nn.Conv2d(d, d, 1, bias=True)
+        self.proj_q = nn.Conv2d(C_rv, d, 1, bias=True)
         self.proj_v = nn.Conv2d(C_bev, d, 1, bias=True)
-        self.proj_o = nn.Conv2d(d, C_rv, 1, bias=True)
+        self.proj_o = nn.Linear(d, C_rv)
         
         self.query_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax,
-                                                    in_rv_size=rv_size, 
+                                                    in_rv_size=in_rv_size, 
                                                     og_rv_size=og_rv_size)
         
         self.msda_layers = nn.ModuleList()
@@ -84,6 +86,15 @@ class RV2BEVFrustumAttn(nn.Module):
 
         pe = self.build_sinusoidal_bev_pe(H=128, W=128, C=d, device='cpu')
         self.register_buffer("bev_pe", pe, persistent=False)
+        
+        n_q_h = self.query_generator.n_q_h
+        n_q_w = self.query_generator.n_q_w
+        self.num_q_per_latent_cell = n_q_h * n_q_w
+        
+        if self.num_q_per_latent_cell > 1:
+        # conditional instantiation bc ddp will complain about unused parameters otherwise
+            self.query_aggregate = nn.Conv2d(C_rv, C_rv, kernel_size=(n_q_h, n_q_w), stride=(n_q_h, n_q_w))
+
 
     def build_sinusoidal_bev_pe(self, H, W, C, device):
         assert C % 2 == 0, "Embedding dim must be even for sine/cosine PE."
@@ -98,7 +109,7 @@ class RV2BEVFrustumAttn(nn.Module):
         pe[0, C//2+1::2, :, :] = torch.cos(y_pos.unsqueeze(0) * div_term.view(-1, 1, 1))
         return pe
 
-    def forward(self, x_rv, bev, lidar2ego_mat, temperature=1.0):
+    def forward(self, x_rv, bev, lidar2ego_mat, return_nhwc=True):
         B, Hrv, Wrv, Crv = x_rv.shape
         B2, Cb, Hbev, Wbev = bev.shape
         if B < B2:
@@ -123,7 +134,7 @@ class RV2BEVFrustumAttn(nn.Module):
         ref = ref.view(B, -1, 2) # [B, len_q, 2]
         
         # Flatten query and value for MSDA
-        query = query.flatten(B, -1, self.d).contiguous() # [B, Len_q_pts, d]
+        query = Q0.flatten(1, 2).contiguous() # [B, Len_q_pts, d]
 
         reference_points = ref.reshape(B, -1, 2)                     # [B, Len_q_pts, 2]
         reference_points = reference_points.unsqueeze(2)       # [B, Len_q_pts, 1, 1, 2]
@@ -136,19 +147,26 @@ class RV2BEVFrustumAttn(nn.Module):
         spatial_shapes = torch.as_tensor([[Hbev, Wbev]], device=bev.device, dtype=torch.long)
         level_start_index = torch.as_tensor([0], device=bev.device, dtype=torch.long)
 
-        for msda_layer in msda_layers:
+        for msda_layer in self.msda_layers:
             query = msda_layer(query, 
                                value, 
                                reference_points, 
                                spatial_shapes, 
                                level_start_index)
 
-        y = self.proj_o(query)
+        fused = self.proj_o(query) # [B, Len_q_pts, C_rv]
         
-        y = y.contiguous()
-
-        # Return the KL loss to be added to the main training objective
-        return y, depth_logits, torch.tensor(0.0)
+        if self.num_q_per_latent_cell > 1:
+            fused = fused.transpose(1, 2).view(B, self.C_rv, self.og_Hrv, self.og_Wrv)
+            fused = self.query_aggregate(fused)  # [B, inC_rv, inHrv, inWrv]
+            fused = fused.permute(0,2,3,1).contiguous()  # [B, inHrv, inWrv, inC_rv]
+        else:
+            fused = fused.view(B, self.og_Hrv, self.og_Wrv, self.C_rv) # [B, inHrv, inWrv, inC_rv]
+        
+        if not return_nhwc:
+            fused = fused.permute(0,3,1,2).contiguous()  # [B, inC_rv, inHrv, inWrv]
+                
+        return fused, depth_logits
 
 
 if __name__ == "__main__":
@@ -174,11 +192,10 @@ if __name__ == "__main__":
         C_bev=Cb,
         d=128,
         rmax=51.2,
-        bin_size=0.8,
         bev_extent=(-51.2, 51.2, -51.2, 51.2),
         n_heads=8,
         msda_points=6,
-        rv_size=(2, 64),
+        in_rv_size=(2, 64),
         og_rv_size=(32, 1024)
     )
     

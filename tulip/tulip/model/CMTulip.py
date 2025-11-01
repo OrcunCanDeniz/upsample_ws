@@ -63,7 +63,7 @@ class CMTULIP(TULIP):
         self.load_lss_weights(lss_weights_path)
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
         self.max_range = 51.2
-        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, rmax=self.max_range, bin_size=0.8)
+        self.frust_attn = RV2BEVFrustumAttn(C_rv=384, C_bev=80, rmax=self.max_range)
         self.range_head_weight = 0.05
     
     def load_lss_weights(self, lss_weights_path, strict=False):
@@ -142,7 +142,7 @@ class CMTULIP(TULIP):
             return False
 
 
-    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, range_head_target, mc_drop = False):
+    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
         bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
             
         x = self.patch_embed(x) 
@@ -153,7 +153,7 @@ class CMTULIP(TULIP):
             x = layer(x)
 
         x = self.first_patch_expanding(x)
-        x, rh_preds, kl_loss = self.frust_attn(x, bev_feat, lidar2ego_mat)
+        x, rh_preds = self.frust_attn(x, bev_feat, lidar2ego_mat)
 
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
@@ -177,22 +177,26 @@ class CMTULIP(TULIP):
         if mc_drop:
             return x
         else:
-            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, kl_loss)
+            total_loss, pixel_loss, range_head_loss = self.forward_loss(x, rh_preds, target)
             return x, total_loss, pixel_loss, range_head_loss
 
-    def forward_loss(self, pred, target, loss_kl):
+    def forward_loss(self, pred, rh_preds, target):
         # range_head_target is normalized by max_range
+        
+        loss_rh = F.mse_loss(rh_preds, target)
+        
         loss = (pred - target).abs()
         loss = loss.mean()
+        
+        total_loss = loss + loss_rh * self.range_head_weight
         
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
         else:
             pixel_loss = loss.clone()
         
-        # loss+=loss_kl
 
-        return loss, pixel_loss, loss_kl
+        return total_loss, pixel_loss, loss_rh
     
     
     def gaussian_bins_targets(self, gt_depth, bin_size=0.8, rmax=51.2, sigma_bins=1.0):
