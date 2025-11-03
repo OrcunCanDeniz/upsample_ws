@@ -9,7 +9,7 @@ from util.filter import *
 
 from .tulip import TULIP
 from bevdepth.layers.backbones.base_lss_fpn import BaseLSSFPN
-from .ray_masked_bev_attn import RayMaskedBEVAttention
+from .masked_bev_transformer import MaskedBEVTransformer
 import os
 
 import pdb
@@ -63,8 +63,8 @@ class CMTULIP(TULIP):
         self.load_lss_weights(lss_weights_path)
         self.multiview_backbone.depth_net.depth_conv[4].im2col_step = im2col_step
         self.max_range = 55
-        self.frust_attn = RayMaskedBEVAttention()
-        self.range_head_weight = 0.05
+        self.enc_frust_attn = MaskedBEVTransformer(spatial_rv_shape=(4,128), rv_ch=192, attention_dim=256, num_layers=2)
+        self.dec_frust_attn = MaskedBEVTransformer(spatial_rv_shape=(4,128), rv_ch=192, attention_dim=256, num_layers=2)
     
     def load_lss_weights(self, lss_weights_path, strict=False):
         """
@@ -151,14 +151,17 @@ class CMTULIP(TULIP):
         for i, layer in enumerate(self.layers):
             x_save.append(x)
             x = layer(x)
+            if i == 0:
+                x = self.enc_frust_attn(x, bev_feat, lidar2ego_mat)
 
         x = self.first_patch_expanding(x)
-        x, attn = self.frust_attn(x, bev_feat, lidar2ego_mat)
         for i, layer in enumerate(self.layers_up):
-            x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
+            res_idx = len(x_save) - i - 2
+            x = torch.cat([x, x_save[res_idx]], -1)
             x = self.skip_connection_layers[i](x)
             x = layer(x)
-
+            if i == 0:
+                x = self.dec_frust_attn(x, bev_feat, lidar2ego_mat)
         
         x = self.norm_up(x)
         
@@ -180,14 +183,10 @@ class CMTULIP(TULIP):
             return x, total_loss, pixel_loss
 
     def forward_loss(self, pred, target):
-        # range_head_target is normalized by max_range
-        
-        loss_rh = F.mse_loss(rh_preds, target)
+        loss_rh = torch.tensor(0.0, device=pred.device)
         
         loss = (pred - target).abs()
         loss = loss.mean()
-        
-        total_loss = loss + loss_rh * self.range_head_weight
         
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
