@@ -143,6 +143,7 @@ class CMTULIP(TULIP):
 
 
     def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
+    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
         bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
             
         x = self.patch_embed(x) 
@@ -181,8 +182,13 @@ class CMTULIP(TULIP):
 
     def forward_loss(self, pred, target):
         # range_head_target is normalized by max_range
+        
+        loss_rh = F.mse_loss(rh_preds, target)
+        
         loss = (pred - target).abs()
         loss = loss.mean()
+        
+        total_loss = loss + loss_rh * self.range_head_weight
         
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
@@ -192,7 +198,7 @@ class CMTULIP(TULIP):
         return loss, pixel_loss, 0
     
     
-    def gaussian_bins_targets(self, gt_depth, bin_size=0.5, rmax=55.0, sigma_bins=1.0):
+    def gaussian_bins_targets(self, gt_depth, bin_size=0.8, rmax=51.2, sigma_bins=1.0):
         # returns soft targets: [B, n_bins, H, W], sum=1 per pixel
         B, H, W = gt_depth.shape
         gt_depth = (gt_depth * rmax)

@@ -162,28 +162,32 @@ def main(args):
 
     cudnn.benchmark = True
 
-    dataset_train = generate_dataset(is_train = True, args = config)
-    dataset_val = generate_dataset(is_train = False, args = config)
-
-    print(f"There are totally {len(dataset_train)} training data and {len(dataset_val)} validation data")
-
-
+    if not args.eval:
+        dataset_train = generate_dataset(is_train = True, args = config)
+        print(f"There are totally {len(dataset_train)} training data")
+    else:
+        dataset_val = generate_dataset(is_train = False, args = config)
+        print(f"There are totally {len(dataset_val)} validation data")
     
     if True:  # config.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
 
-        sampler_train = torch.utils.data.DistributedSampler(
-            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-        )
-        
-        # Validation set uses only one rank to write the summary
-        sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-        print("Sampler_train = %s" % str(sampler_train))
+        if not args.eval:
+            sampler_train = torch.utils.data.DistributedSampler(
+                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+            )
+            print("Sampler_train = %s" % str(sampler_train))
+        else: 
+            # Validation set uses only one rank to write the summary
+            sampler_val = torch.utils.data.DistributedSampler(
+                    dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+            print("Sampler_val = %s" % str(sampler_val))
     else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        if not args.eval:
+            sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        else:
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     phase2_start = None
     start_from_p2 = False
@@ -257,26 +261,25 @@ def main(args):
     else:
         log_writer = None
 
-
-    data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_mem,
-        drop_last=True,
-        collate_fn=collate_func,
-        persistent_workers=True
-    )
-
-
-    data_loader_val = torch.utils.data.DataLoader(
-        dataset_val, sampler=sampler_val,
-        batch_size=1,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_mem,
-        drop_last=False,
-        collate_fn=collate_func
-    )
+    if not args.eval:
+        data_loader_train = torch.utils.data.DataLoader(
+            dataset_train, sampler=sampler_train,
+            batch_size=config.batch_size,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_mem,
+            drop_last=True,
+            collate_fn=collate_func,
+            persistent_workers=True
+        )
+    else:
+        data_loader_val = torch.utils.data.DataLoader(
+            dataset_val, sampler=sampler_val,
+            batch_size=1,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_mem,
+            drop_last=False,
+            collate_fn=collate_func
+        )
     
     
     # define the model

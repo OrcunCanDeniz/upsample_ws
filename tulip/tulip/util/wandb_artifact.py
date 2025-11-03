@@ -68,7 +68,7 @@ class WandbArtifactHook:
                 local_filepath = Path(self.dir_path, filename)
                 if self.logger:
                     self.logger.info(f"{self.NAME} will upload from: {local_filepath}")
-                wandb_artifact.add_file(local_filepath)
+                wandb_artifact.add_file(local_filepath, skip_cache=True)
             self.wandb.log_artifact(wandb_artifact)
             if self.logger:
                 self.logger.info(f"{self.NAME} uploaded {len(arti_files)} checkpoint files as wandb artifact")

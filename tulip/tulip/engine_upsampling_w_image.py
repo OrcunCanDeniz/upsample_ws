@@ -77,8 +77,7 @@ def train_one_epoch(model: torch.nn.Module,
         samples_low_res = data[4]
         samples_high_res = data[5]
         lidar2ego_mat = data[6]
-        # mask_samples = data[7]
-        # range_head_targets = data[8]
+        mask_samples = data[7]
         
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
@@ -86,7 +85,6 @@ def train_one_epoch(model: torch.nn.Module,
         samples_low_res = samples_low_res.to(device, non_blocking=True)
         samples_high_res = samples_high_res.to(device, non_blocking=True)
         lidar2ego_mat = lidar2ego_mat.to(device, non_blocking=True)
-        # range_head_targets = range_head_targets.to(device, non_blocking=True)
 
         with torch.cuda.amp.autocast():
             _, total_loss, pixel_loss = model(samples_low_res, cam_imgs, 
