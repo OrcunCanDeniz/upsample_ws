@@ -1,5 +1,6 @@
 import math
 from typing import Optional, Tuple
+from einops import rearrange
 
 import torch
 from torch import nn
@@ -20,14 +21,20 @@ class SimpleQueryGenerator(nn.Module):
                  rmax=51.2,
                  C_rv=384,
                  in_rv_size=(2,64),
-                 og_rv_size=(32,1024)):
+                 og_rv_size=(32,1024),
+                 in_enc=False):
         super().__init__()
         
         self.C_rv = C_rv
-        self.rmax = rmax            
+        self.rmax = rmax     
+        self.in_enc = in_enc
         
         # 1D range proposal head for processing expanded features
-        self.range_head =  nn.Conv2d(C_rv, 1, 1, bias=True)
+        if not in_enc:
+            self.range_head = nn.Conv2d(C_rv, 1, 1, bias=True)
+        else:
+            self.save_in_rv_size = in_rv_size
+            in_rv_size = (32, 1024)
         
         # Build azimuth and zenith maps by in_rv_size (width spans [-pi, pi))
         self.og_Hrv, self.og_Wrv = int(og_rv_size[0]), int(og_rv_size[1])
@@ -50,10 +57,7 @@ class SimpleQueryGenerator(nn.Module):
             # TODO Dropouts?
             for _ in range(num_ups):
                 up_layers.extend([
-                    nn.Conv2d(in_channels=C_rv, out_channels=C_rv*2, kernel_size=(1, 1)),
-                    nn.BatchNorm2d(C_rv*2),
-                    nn.GELU(),
-                    nn.Conv2d(in_channels=C_rv*2, out_channels=C_rv*4, kernel_size=(1, 1)),
+                    nn.Conv2d(in_channels=C_rv, out_channels=C_rv*4, kernel_size=(1, 1)),
                     nn.BatchNorm2d(C_rv*4),
                     nn.GELU(),
                     nn.Conv2d(in_channels=C_rv*4, out_channels=C_rv*4, kernel_size=(1, 1)),
@@ -63,6 +67,32 @@ class SimpleQueryGenerator(nn.Module):
         
         self.set_geometry()
         
+        if in_enc:
+            self.low_res_index = range(0, 32, 4)
+            self.u_vec_x = self.u_vec_x[:, :, :, self.low_res_index, :]
+            self.u_vec_y = self.u_vec_y[:, :, :, self.low_res_index, :]
+            self.u_vec_z = self.u_vec_z[:, :, :, self.low_res_index, :]
+            self.in_Hrv = self.save_in_rv_size[0]
+            self.in_Wrv = self.save_in_rv_size[1]
+            self.ds_factor_h = 8 // self.in_Hrv
+            self.ds_factor_w = 1024 // self.in_Wrv
+            
+            self.n_q_w = int(self.ds_factor_w)
+            self.n_q_h = int(self.ds_factor_h)
+            
+            assert self.n_q_w == self.ds_factor_w, "ogW / inW must be int" 
+            assert self.n_q_h == self.ds_factor_h, "ogH / inH must be int" 
+            
+            self.num_q_per_latent_cell = self.n_q_w * self.n_q_h
+            num_addit_ch = self.C_rv * self.num_q_per_latent_cell
+            self.populate_channels = nn.Sequential(
+                nn.Conv2d(in_channels=C_rv, out_channels=num_addit_ch, kernel_size=(1, 1)),
+                nn.BatchNorm2d(num_addit_ch),
+                nn.GELU(),
+                nn.Conv2d(in_channels=num_addit_ch, out_channels=num_addit_ch, kernel_size=(1, 1)),
+            )
+            
+            
     def set_geometry(self):
         # bin azimuths into Wrv bins
         assert self.n_q_w * self.in_Wrv <= self.og_Wrv, "Total number  of horizontal samples must be less than or equal to original width"
@@ -122,7 +152,7 @@ class SimpleQueryGenerator(nn.Module):
         self.elev_per_q = elev_per_q.repeat(1, self.in_Wrv, 1) # (in_Hrv, in_Wrv, n_q_h)
         elev_per_pixel = elev_per_q.mean(-1) # (in_Hrv, in_Wrv)
 
-    def _point_hypothesis(self, x_rv):
+    def _point_hypothesis(self, x_rv, lr_depths=None):
         """
         Generate points in lidar frame by predicting intermediate normalized depth and unit vectors
         This will always get rv with original size.
@@ -132,12 +162,19 @@ class SimpleQueryGenerator(nn.Module):
         return: [B, Hrv* Wrv, 3]
         """
         B, Crv, Hrv, Wrv = x_rv.shape
-        assert Hrv == self.og_Hrv and Wrv == self.og_Wrv, f"Input range view size {Hrv}x{Wrv} does not match expected size {self.og_Hrv}x{self.og_Wrv}"
+        if not self.in_enc:
+            assert Hrv == self.og_Hrv and Wrv == self.og_Wrv, f"Input range view size {Hrv}x{Wrv} does not match expected size {self.og_Hrv}x{self.og_Wrv}"
         # Apply range head to each range view pixel
-        interm_depths_norm = self.range_head(x_rv).sigmoid() # normalized intermediate depth
-        interm_depths = (interm_depths_norm * self.rmax).detach()
-
-        interm_depths = interm_depths.view(B, self.n_q_h, self.n_q_w, self.in_Hrv, self.in_Wrv)
+        
+        if self.in_enc:
+            with torch.no_grad():
+                interm_depths = lr_depths * self.rmax
+                interm_depths = interm_depths.unsqueeze(2)
+                interm_depths_norm = None
+        else:
+            interm_depths_norm = self.range_head(x_rv).sigmoid() # normalized intermediate depth
+            interm_depths = (interm_depths_norm * self.rmax).detach()
+            interm_depths = interm_depths.view(B, self.n_q_h, self.n_q_w, self.in_Hrv, self.in_Wrv)
 
         x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
         y_l = (interm_depths * self.u_vec_y).flatten(1) # [B, n_total_q * Hrv * Wrv] 
@@ -148,7 +185,7 @@ class SimpleQueryGenerator(nn.Module):
         return p_lidar_h, interm_depths_norm
         
         
-    def forward(self, x_rv, tf_matrix=None, ret_feats=False):
+    def forward(self, x_rv, tf_matrix=None, ret_feats=False, lr_depths=None):
         """
         Generate query points in desired frame. One per each pixel in output space.
         x_rv: [B, Crv, H_lrv, W_lrv]
@@ -160,10 +197,15 @@ class SimpleQueryGenerator(nn.Module):
         
         x_ret = x_rv.clone() if ret_feats else None
         if self.num_q_per_latent_cell >1:
-            x_rv = self.spatial_expand(x_rv)
+            if self.in_enc:
+                x_rv = self.populate_channels(x_rv)
+                x_rv = rearrange(x_rv, 'B (P1 P2 C) H W -> B C (H P1) (W P2)', P1=self.n_q_h, P2=self.n_q_w)
+            else:
+                x_rv = self.spatial_expand(x_rv)
             x_ret = x_rv.clone() if ret_feats else None
             
-        points, interm_depths = self._point_hypothesis(x_rv)
+        assert x_rv.shape[1] == self.C_rv, f"After expansion, in C {x_rv.shape[1]} != expected C {self.C_rv}"
+        points, interm_depths = self._point_hypothesis(x_rv, lr_depths=lr_depths) # [B, Hrv* Wrv, 3]
         
         if tf_matrix is not None:
             ones = torch.ones_like(points[..., :1])

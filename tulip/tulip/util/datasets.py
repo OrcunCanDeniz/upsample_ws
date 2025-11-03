@@ -559,7 +559,7 @@ def build_nuscenes_upsampling_dataset(is_train, args):
     return dataset_concat
 
 @register_dataset('nuscenes_with_image')
-def build_nuscenes_w_image_upsampling_dataset(is_train, log_transform = False):
+def build_nuscenes_w_image_upsampling_dataset(is_train, args):
     input_size = (8,1024)
     output_size = (32,1024)
     
@@ -570,7 +570,7 @@ def build_nuscenes_w_image_upsampling_dataset(is_train, log_transform = False):
     if output_size[1] // input_size[1] > 1:
         t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
 
-    if log_transform:
+    if args.log_transform:
         t_low_res.append(LogTransform())
         t_high_res.append(LogTransform())
 

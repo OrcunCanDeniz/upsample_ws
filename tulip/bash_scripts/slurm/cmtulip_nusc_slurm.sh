@@ -24,6 +24,8 @@ NODE_LOCAL_ARTEFACTS_DIR="${TMPDIR}/${PROJECT}_outputs/${SLURM_JOB_ID}"
 SLURM_LOGS_DIR="${TMPDIR}/logs"
 
 mkdir -p "${SLURM_LOGS_DIR}" "${NODE_LOCAL_ARTEFACTS_DIR}" "${LOCAL_ARTEFACTS_DIR}"
+cp $WORK/data/nuscenes/cmtulip_bevformer_train.tar $TMPDIR/
+mkdir -p $TMPDIR/nusc_dataset && tar -xf $TMPDIR/cmtulip_bevformer_train.tar -C $TMPDIR/nusc_dataset
 
 # Go to your code root
 cd "${CODE_DIR}"

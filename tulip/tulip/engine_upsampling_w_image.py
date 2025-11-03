@@ -62,8 +62,8 @@ def train_one_epoch(model: torch.nn.Module,
 
     accum_iter = args.accum_iter
     base = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
-    if epoch in (5, 10, 50):
-        base.range_head_weight.mul_(0.5)   # Decrease range head weight
+    # if epoch in (5, 10, 50):
+    #     base.range_head_weight.mul_(0.5)   # Decrease range head weight
 
     optimizer.zero_grad()
 
@@ -117,8 +117,7 @@ def train_one_epoch(model: torch.nn.Module,
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
-        if args.log_transform or args.depth_scale_loss:
-            total_loss_value_reduce = misc.all_reduce_mean(total_loss_value)
+        total_loss_value_reduce = misc.all_reduce_mean(total_loss_value)
         pixel_loss_value_reduce = misc.all_reduce_mean(pixel_loss_value)
         range_head_loss_value_reduce = misc.all_reduce_mean(range_head_loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
@@ -126,9 +125,8 @@ def train_one_epoch(model: torch.nn.Module,
             This calibrates different curves when batch size changes.
             """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
-            if args.log_transform or args.depth_scale_loss:
-                log_writer.add_scalar('train_loss_total', total_loss_value_reduce, epoch_1000x)
-                log_writer.add_scalar('train_loss_interm_depth', range_head_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('train_loss_total', total_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('train_loss_interm_depth', range_head_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('train_loss_pixel', pixel_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 

@@ -72,7 +72,7 @@ class FFN(nn.Module):
 class RV2MVImgAttn(nn.Module):
     def __init__(self, C_rv, rmax, embed_dims=128, 
                  msda_points=8, num_cams=6, num_levels=4, num_layers=1, im2col_step=256,
-                 dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024)):
+                 dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024), in_enc=False):
         super().__init__()
         self.C_rv = C_rv
         self.rmax = rmax
@@ -84,7 +84,8 @@ class RV2MVImgAttn(nn.Module):
         
         self.ref_pts_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax, 
                                                       in_rv_size=in_rv_size,
-                                                      og_rv_size=og_rv_size)
+                                                      og_rv_size=og_rv_size,
+                                                      in_enc=in_enc)
 
         self.proj_q = nn.Sequential(
             nn.Conv2d(C_rv, embed_dims, 1, bias=True), 
@@ -109,13 +110,13 @@ class RV2MVImgAttn(nn.Module):
                                                             num_levels=4,
                                                             im2col_step=im2col_step))
                                                         )
-        n_q_h = self.ref_pts_generator.n_q_h
-        n_q_w = self.ref_pts_generator.n_q_w
-        self.num_q_per_latent_cell = n_q_h * n_q_w
+        self.n_q_h = self.ref_pts_generator.n_q_h
+        self.n_q_w = self.ref_pts_generator.n_q_w
+        self.num_q_per_latent_cell = self.ref_pts_generator.num_q_per_latent_cell
         
         if self.num_q_per_latent_cell > 1:
         # conditional instantiation bc ddp will complain about unused parameters otherwise
-            self.query_aggregate = nn.Conv2d(C_rv, C_rv, kernel_size=(n_q_h, n_q_w), stride=(n_q_h, n_q_w))
+            self.query_aggregate = nn.Conv2d(C_rv, C_rv, kernel_size=(self.n_q_h, self.n_q_w), stride=(self.n_q_h, self.n_q_w))
 
     # This function must use fp32!!!
     @force_fp32(apply_to=('points_lidar', 'lidar2img', 'img_shapes'))
@@ -157,7 +158,7 @@ class RV2MVImgAttn(nn.Module):
 
         return reference_points_cam, mask
     
-    def forward(self, in_rv_feat, img_feats, lidar2img_rts, img_shapes, return_nhwc=False):
+    def forward(self, in_rv_feat, img_feats, lidar2img_rts, img_shapes, return_nhwc=False, lr_depths=None):
         """
         Fuses range-view (RV) tokens with multi-view image features using SpatialCrossAttention.
 
@@ -174,7 +175,7 @@ class RV2MVImgAttn(nn.Module):
             fused_rv: Tensor [B, Hrv, Wrv, C_rv]  # same layout as rv_feat if input was NHWC; otherwise returns NHWC.
         """
         B, in_C, in_Hrv, in_Wrv = in_rv_feat.shape # range view latent size
-        points_lidar, interm_depths, rv_feat = self.ref_pts_generator(in_rv_feat, ret_feats=True)
+        points_lidar, interm_depths, rv_feat = self.ref_pts_generator(in_rv_feat, ret_feats=True, lr_depths=lr_depths) 
         rv_feat = self.proj_q(rv_feat)
 
         reference_points_cam, mask = self.point_sampling(points_lidar, lidar2img_rts, img_shapes)
@@ -193,13 +194,13 @@ class RV2MVImgAttn(nn.Module):
         
         # query is in shape [B, N, C_rv]
         fused = self.proj_out(query)
-        
+
         if self.num_q_per_latent_cell > 1:
-            fused = fused.transpose(1, 2).view(B, self.C_rv, self.og_Hrv, self.og_Wrv)
+            fused = fused.transpose(1, 2).reshape(B, self.C_rv, (self.in_Hrv * self.n_q_h), (self.in_Wrv * self.n_q_w))
             fused = self.query_aggregate(fused)  # [B, inC_rv, inHrv, inWrv]
             fused = fused.permute(0,2,3,1).contiguous()  # [B, inHrv, inWrv, inC_rv]
         else:
-            fused = fused.view(B, self.og_Hrv, self.og_Wrv, self.C_rv) # [B, inHrv, inWrv, inC_rv]
+            fused = fused.view(B, (self.in_Hrv * self.n_q_h), (self.in_Wrv * self.n_q_w), self.C_rv) # [B, inHrv, inWrv, inC_rv]
             
         if not return_nhwc:
             fused = fused.permute(0,3,1,2).contiguous()  # [B, inC_rv, inHrv, inWrv]

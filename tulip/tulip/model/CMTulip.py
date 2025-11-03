@@ -63,8 +63,12 @@ class CMTULIP(TULIP):
         self.load_lss_weights(lss_weights_path)
         self.max_range = 55.0
         num_img_feat_lvl = backbone_config.img_neck_conf.get('num_outs', 4)
-        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128))
-        self.dec_fuser = RV2MVImgAttn(C_rv=96, rmax=self.max_range, msda_points=8, num_layers=2, num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(32,1024))
+        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, 
+                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
+                                      in_enc=True)
+        self.dec_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2,
+                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
+                                      in_enc=True)
         self.register_buffer('range_head_weight', torch.tensor(0.2, dtype=torch.float32), persistent=True)
         
     
@@ -147,6 +151,7 @@ class CMTULIP(TULIP):
     def forward(self, x, in_imgs, lidar2img_rts, img_shapes, target, mc_drop = False):
         interm_depths = []
         img_feats = self.multiview_backbone(in_imgs)
+        lr_depths = x.clone()
             
         x = self.patch_embed(x) 
         x = self.pos_drop(x) 
@@ -156,10 +161,9 @@ class CMTULIP(TULIP):
             x = layer(x)
             if i == 0:
                 fuser_in = x.permute(0,3,1,2).contiguous()  # B, C, H, W
-                x, interm_depth_enc = self.enc_fuser(fuser_in, img_feats, 
-                                                           lidar2img_rts, img_shapes,
-                                                           return_nhwc=True)
-                interm_depths.append(interm_depth_enc)
+                x, _ = self.enc_fuser(fuser_in, img_feats, 
+                                        lidar2img_rts, img_shapes,
+                                        return_nhwc=True, lr_depths=lr_depths)
 
         x = self.first_patch_expanding(x)
         # maybe fuse here too, x shape : 32, 2, 64, 384
@@ -168,10 +172,14 @@ class CMTULIP(TULIP):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
             x = self.skip_connection_layers[i](x)
             x = layer(x)
+            if i == 0:
+                fuser_in = x.permute(0,3,1,2).contiguous()
+                x, _ = self.dec_fuser(fuser_in, img_feats, 
+                                        lidar2img_rts, img_shapes,
+                                        return_nhwc=True, lr_depths=lr_depths)
 
         
         x = self.norm_up(x)
-        
 
         if self.pixel_shuffle:
             x = rearrange(x, 'B H W C -> B C H W')
@@ -180,8 +188,7 @@ class CMTULIP(TULIP):
             x = self.final_patch_expanding(x)
             x = rearrange(x, 'B H W C -> B C H W')
 
-        x, interm_depth_dec = self.dec_fuser(x, img_feats, lidar2img_rts, img_shapes)
-        interm_depths.append(interm_depth_dec)
+        
         x = self.decoder_pred(x.contiguous())
         if mc_drop:
             return x
@@ -191,12 +198,12 @@ class CMTULIP(TULIP):
 
     def forward_loss(self, pred, target, interm_depth_preds):
         # target is normalized by max_range
-        interm_d_tensor = torch.cat(interm_depth_preds, dim=1)  # [B, n_heads, H, W]
+        # interm_d_tensor = torch.cat(interm_depth_preds, dim=1)  # [B, n_heads, H, W]
         loss = (pred - target).abs()
         loss = loss.mean()
         
-        range_head_loss = (interm_d_tensor - target).abs().mean()
-        loss = loss + range_head_loss * self.range_head_weight
+        # range_head_loss = (interm_d_tensor - target).abs().mean()
+        loss = loss #+ range_head_loss * self.range_head_weight
         
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
@@ -205,7 +212,7 @@ class CMTULIP(TULIP):
         
         # loss+=loss_kl
 
-        return loss, pixel_loss, range_head_loss
+        return loss, pixel_loss, torch.tensor(0.0, device=pred.device)
     
     
     def gaussian_bins_targets(self, gt_depth, bin_size=0.8, rmax=51.2, sigma_bins=1.0):
