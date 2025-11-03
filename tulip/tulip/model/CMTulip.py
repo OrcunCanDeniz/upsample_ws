@@ -143,7 +143,6 @@ class CMTULIP(TULIP):
 
 
     def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
-    def forward(self, x, in_imgs, mats_dict, timestamps, target, lidar2ego_mat, mc_drop = False):
         bev_feat = self.multiview_backbone(in_imgs, mats_dict, timestamps)
             
         x = self.patch_embed(x) 
