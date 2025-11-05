@@ -45,7 +45,7 @@ data_path_low_res: './data/nuscenes/'
 
 # Data processing options
 save_pcd: false  # Save PCD output for KITTI evaluation
-log_transform: true  # improve
+log_transform: false 
 keep_close_scan: false
 keep_far_scan: false
 
