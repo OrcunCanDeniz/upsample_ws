@@ -3,11 +3,11 @@
 #SBATCH --job-name=CMTULIP_train               # your job name
 #SBATCH --nodes=1                          # 1 node
 #SBATCH --ntasks-per-node=1                # one srun task per node
-#SBATCH --gres=gpu:100:8               # 8 GPUs on that node
-#SBATCH --cpus-per-task=128                  # CPUs for data loading, etc.
-#SBATCH --time=24:00:00                    # hh:mm:ss walltime
+#SBATCH --gres=gpu:100:1               # 8 GPUs on that node
+#SBATCH --cpus-per-task=16                  # CPUs for data loading, etc.
+#SBATCH --time=12:00:00                    # hh:mm:ss walltime
 #SBATCH --partition=a100                 # GPU partition
-#SBATCH -C a100_80
+
 # (no --output/--error here—handled by srun instead)
 
 # Paths (adjust to your environment)
@@ -19,12 +19,9 @@ export DATA_DIR="${WORK}/data/nuscenes/"
 export CONTAINER_WS="/workspace/${PROJECT}"
 
 # Where to stage outputs/logs
-LOCAL_ARTEFACTS_DIR="${HOME}/${PROJECT}_outputs"
 NODE_LOCAL_ARTEFACTS_DIR="${TMPDIR}/${PROJECT}_outputs/${SLURM_JOB_ID}"
 SLURM_LOGS_DIR="${TMPDIR}/logs"
 
-cp $WORK/data/nuscenes/cmtulip_bevformer_train.tar $TMPDIR/
-mkdir -p $TMPDIR/nusc_dataset && tar -xf $TMPDIR/cmtulip_bevformer_train.tar -C $TMPDIR/nusc_dataset
 
 # Go to your code root
 cd "${CODE_DIR}"
@@ -59,9 +56,10 @@ export APPTAINERENV_CURL_CA_BUNDLE="$CURL_CA_BUNDLE"
 export APPTAINERENV_GIT_SSL_CAINFO="$GIT_SSL_CAINFO"
 export APPTAINERENV_WANDB_API_KEY="$(< "${HOME}/.wandb_key")"
 export APPTAINERENV_CODE_DIR="$CONTAINER_WS"
+export APPTAINERENV_USE_WORK="1"
 
-# Training
+# eval
 apptainer exec --nv \
   --bind "${BIND_LIST}" \
   "${SIF_IMAGE}" \
-  bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 && cd "$CODE_DIR" && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}"'
+  bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 && cd "$CODE_DIR" && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}" eval'
