@@ -16,22 +16,35 @@ ELEV_DEG_PER_RING_NUCSENES = torch.tensor([-30.67, -29.33, -28., -26.66, -25.33,
 class SimpleQueryGenerator(nn.Module):
     """
     Given feature map from range view, generate nqw*nqh numver of 3D query points in ego frame.
+    
+    Args:
+        rmax: maximum range in meters used to normalize depths
+        C_rv: number of channels in range view feature map
+        in_rv_size: size of range view feature map to be processed
+        og_rv_size: original size of range view image
+        only_low_res: If True, only low resolution gt depths will be used to generate points. 
+                        If False, range prediction head is used to generate intermediate depths, with resolution of og_rv_size.
     """
     def __init__(self,
                  rmax=51.2,
                  C_rv=384,
                  in_rv_size=(2,64),
                  og_rv_size=(32,1024),
-                 in_enc=False):
+                 only_low_res=False):
         super().__init__()
         
         self.C_rv = C_rv
         self.rmax = rmax     
-        self.in_enc = in_enc
+        self.only_low_res = only_low_res
         
         # 1D range proposal head for processing expanded features
-        if not in_enc:
-            self.range_head = nn.Conv2d(C_rv, 1, 1, bias=True)
+        if not only_low_res:
+            self.range_head = nn.Sequential(
+                                            nn.GroupNorm(num_groups=8, num_channels=C_rv),
+                                            nn.Conv2d(C_rv, 64, kernel_size=3, padding=1, bias=False),
+                                            nn.SiLU(inplace=True),
+                                            nn.Conv2d(64, 1, kernel_size=1, bias=True)
+                                        )
         else:
             self.save_in_rv_size = in_rv_size
             in_rv_size = (32, 1024)
@@ -44,7 +57,6 @@ class SimpleQueryGenerator(nn.Module):
         
         self.n_q_w = int(self.ds_factor_w)
         self.n_q_h = int(self.ds_factor_h)
-        
         assert self.n_q_w == self.ds_factor_w, "ogW / inW must be int" 
         assert self.n_q_h == self.ds_factor_h, "ogH / inH must be int" 
         
@@ -66,9 +78,9 @@ class SimpleQueryGenerator(nn.Module):
             self.spatial_expand = nn.Sequential(*up_layers)
         
         self.set_geometry()
+        self.low_res_index = range(0, 32, 4)
         
-        if in_enc:
-            self.low_res_index = range(0, 32, 4)
+        if only_low_res:
             self.u_vec_x = self.u_vec_x[:, :, :, self.low_res_index, :]
             self.u_vec_y = self.u_vec_y[:, :, :, self.low_res_index, :]
             self.u_vec_z = self.u_vec_z[:, :, :, self.low_res_index, :]
@@ -162,18 +174,24 @@ class SimpleQueryGenerator(nn.Module):
         return: [B, Hrv* Wrv, 3]
         """
         B, Crv, Hrv, Wrv = x_rv.shape
-        if not self.in_enc:
+        if not self.only_low_res:
             assert Hrv == self.og_Hrv and Wrv == self.og_Wrv, f"Input range view size {Hrv}x{Wrv} does not match expected size {self.og_Hrv}x{self.og_Wrv}"
         # Apply range head to each range view pixel
         
-        if self.in_enc:
-            with torch.no_grad():
-                interm_depths = lr_depths * self.rmax
-                interm_depths = interm_depths.unsqueeze(2)
-                interm_depths_norm = None
+        with torch.no_grad():
+            lr_depths = lr_depths * self.rmax
+        
+        if self.only_low_res:
+            # if only low res gt preds will be used to generate points. no range prediction head
+            interm_depths = lr_depths.unsqueeze(2)
+            interm_depths_norm = None
         else:
-            interm_depths_norm = self.range_head(x_rv).sigmoid() # normalized intermediate depth
-            interm_depths = (interm_depths_norm * self.rmax).detach()
+            # range prediction is performed on spatially expanded features but still lr depths are scattered into predicted intermediate depths
+            logits = self.range_head(x_rv.detach())  # normalized intermediate depth
+            interm_depths_norm = torch.sigmoid(logits)
+            interm_depths = interm_depths_norm.detach()
+            interm_depths *= self.rmax
+            interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype)
             interm_depths = interm_depths.view(B, self.n_q_h, self.n_q_w, self.in_Hrv, self.in_Wrv)
 
         x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
@@ -197,7 +215,9 @@ class SimpleQueryGenerator(nn.Module):
         
         x_ret = x_rv.clone() if ret_feats else None
         if self.num_q_per_latent_cell >1:
-            if self.in_enc:
+            if self.only_low_res:
+                # doing this in 2 steps bc cant use PixelShuffle for asymmetric upsampling, 
+                # still could create a custom nn.module class for rearrange to be wrapped by nn.sequential
                 x_rv = self.populate_channels(x_rv)
                 x_rv = rearrange(x_rv, 'B (P1 P2 C) H W -> B C (H P1) (W P2)', P1=self.n_q_h, P2=self.n_q_w)
             else:
