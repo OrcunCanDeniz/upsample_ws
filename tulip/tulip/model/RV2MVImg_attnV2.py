@@ -45,7 +45,7 @@ class CrossModalSCA(nn.Module):
         norm2_name, self.norm2 = build_norm_layer(dict(type='LN'), num_features=embed_dims)
         self.ffn = FFN(embed_dims, embed_dims)
         self.dropout2 = nn.Dropout(dropout)
-        self.in_h = 32 # TODO parametrize these
+        self.in_h = 8 # TODO parametrize these
         self.in_w = 1024
         self.cnt = 0
         
@@ -120,7 +120,7 @@ class RV2MVImgAttn(nn.Module):
         self.ref_pts_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax, 
                                                       in_rv_size=in_rv_size,
                                                       og_rv_size=og_rv_size,
-                                                      only_low_res=only_low_res)
+                                                      in_enc=only_low_res)
 
         self.proj_q = nn.Sequential(
             nn.Conv2d(C_rv, embed_dims, 1, bias=True), 

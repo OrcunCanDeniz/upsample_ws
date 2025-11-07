@@ -9,7 +9,8 @@ from util.filter import *
 
 from .tulip import TULIP
 from .image_backbone import ImageBackbone
-from .RV2MVImg_attn import RV2MVImgAttn
+# from .RV2MVImg_attn import RV2MVImgAttn
+from .RV2MVImg_attnV2 import RV2MVImgAttn
 import os
 
 import pdb
@@ -63,12 +64,12 @@ class CMTULIP(TULIP):
         self.load_lss_weights(lss_weights_path)
         self.max_range = 55.0
         num_img_feat_lvl = backbone_config.img_neck_conf.get('num_outs', 4)
-        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, 
-                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
-                                      in_enc=True)
+        self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2,
+                                    num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
+                                    only_low_res=True)
         self.dec_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2,
-                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
-                                      in_enc=True)
+                                    num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
+                                    only_low_res=True)
         self.register_buffer('range_head_weight', torch.tensor(0.2, dtype=torch.float32), persistent=True)
         
     
