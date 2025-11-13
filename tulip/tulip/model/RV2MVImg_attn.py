@@ -158,7 +158,7 @@ class RV2MVImgAttn(nn.Module):
 
         return reference_points_cam, mask
     
-    def forward(self, in_rv_feat, img_feats, lidar2img_rts, img_shapes, return_nhwc=False, lr_depths=None):
+    def forward(self, in_rv_feat, img_feats, lidar2img_rts, img_shapes, return_nhwc=False, lr_depths=None, target_depths=None, gt_mixture_weight = 0.0):
         """
         Fuses range-view (RV) tokens with multi-view image features using SpatialCrossAttention.
 
@@ -175,7 +175,8 @@ class RV2MVImgAttn(nn.Module):
             fused_rv: Tensor [B, Hrv, Wrv, C_rv]  # same layout as rv_feat if input was NHWC; otherwise returns NHWC.
         """
         B, in_C, in_Hrv, in_Wrv = in_rv_feat.shape # range view latent size
-        points_lidar, interm_depths, rv_feat = self.ref_pts_generator(in_rv_feat, ret_feats=True, lr_depths=lr_depths) 
+        points_lidar, interm_depths, rv_feat = self.ref_pts_generator(in_rv_feat, ret_feats=True, lr_depths=lr_depths,
+                                                                      target_depths=target_depths, gt_mixture_weight=gt_mixture_weight) 
         rv_feat = self.proj_q(rv_feat)
 
         reference_points_cam, mask = self.point_sampling(points_lidar, lidar2img_rts, img_shapes)

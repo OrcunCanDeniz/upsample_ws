@@ -164,7 +164,7 @@ class SimpleQueryGenerator(nn.Module):
         self.elev_per_q = elev_per_q.repeat(1, self.in_Wrv, 1) # (in_Hrv, in_Wrv, n_q_h)
         elev_per_pixel = elev_per_q.mean(-1) # (in_Hrv, in_Wrv)
 
-    def _point_hypothesis(self, x_rv, lr_depths=None):
+    def _point_hypothesis(self, x_rv, lr_depths=None, target_depths=None, gt_mixture_weight = 0.0):
         """
         Generate points in lidar frame by predicting intermediate normalized depth and unit vectors
         This will always get rv with original size.
@@ -187,12 +187,11 @@ class SimpleQueryGenerator(nn.Module):
             interm_depths_norm = None
         else:
             # range prediction is performed on spatially expanded features but still lr depths are scattered into predicted intermediate depths
-            logits = self.range_head(x_rv.detach())  # normalized intermediate depth
-            interm_depths_norm = torch.sigmoid(logits)
-            interm_depths = interm_depths_norm.detach()
+            interm_depths_norm = self.range_head(x_rv.detach()).sigmoid()  # normalized intermediate depth
+            interm_depths = (interm_depths_norm) * (1 - gt_mixture_weight) + target_depths.to(interm_depths.dtype) * gt_mixture_weight
             interm_depths *= self.rmax
             interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype)
-            interm_depths = interm_depths.view(B, self.n_q_h, self.n_q_w, self.in_Hrv, self.in_Wrv)
+            interm_depths = interm_depths.view(B, self.n_q_h, self.n_q_w, self.in_Hrv, self.in_Wrv).detach()
 
         x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
         y_l = (interm_depths * self.u_vec_y).flatten(1) # [B, n_total_q * Hrv * Wrv] 
@@ -203,7 +202,7 @@ class SimpleQueryGenerator(nn.Module):
         return p_lidar_h, interm_depths_norm
         
         
-    def forward(self, x_rv, tf_matrix=None, ret_feats=False, lr_depths=None):
+    def forward(self, x_rv, tf_matrix=None, ret_feats=False, lr_depths=None, target_depths=None, gt_mixture_weight = 0.0):
         """
         Generate query points in desired frame. One per each pixel in output space.
         x_rv: [B, Crv, H_lrv, W_lrv]
@@ -225,7 +224,7 @@ class SimpleQueryGenerator(nn.Module):
             x_ret = x_rv.clone() if ret_feats else None
             
         assert x_rv.shape[1] == self.C_rv, f"After expansion, in C {x_rv.shape[1]} != expected C {self.C_rv}"
-        points, interm_depths = self._point_hypothesis(x_rv, lr_depths=lr_depths) # [B, Hrv* Wrv, 3]
+        points, interm_depths = self._point_hypothesis(x_rv, lr_depths=lr_depths, target_depths=target_depths, gt_mixture_weight=gt_mixture_weight) # [B, Hrv* Wrv, 3]
         
         if tf_matrix is not None:
             ones = torch.ones_like(points[..., :1])

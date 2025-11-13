@@ -71,7 +71,7 @@ def train_one_epoch(model: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, data in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-
+        gt_mixture_weight = np.exp(-(epoch + data_iter_step / len(data_loader)) / 5)
         # we use a per iteration (instead of per epoch) lr scheduler
         cam_imgs = data[0]
         samples_low_res = data[1]

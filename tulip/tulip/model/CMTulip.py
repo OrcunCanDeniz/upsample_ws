@@ -148,10 +148,11 @@ class CMTULIP(TULIP):
             return False
 
 
-    def forward(self, x, in_imgs, lidar2img_rts, img_shapes, target, mc_drop = False):
+    def forward(self, x, in_imgs, lidar2img_rts, img_shapes, target, mc_drop = False, gt_mixture_weight = 0.0):
         interm_depths = []
         img_feats = self.multiview_backbone(in_imgs)
         lr_depths = x.clone()
+        target_depths = target.clone()
             
         x = self.patch_embed(x) 
         x = self.pos_drop(x) 
@@ -162,8 +163,9 @@ class CMTULIP(TULIP):
             if i == 0:
                 fuser_in = x.permute(0,3,1,2).contiguous()  # B, C, H, W
                 x, interm_depths_norm = self.enc_fuser(fuser_in, img_feats, 
-                                        lidar2img_rts, img_shapes,
-                                        return_nhwc=True, lr_depths=lr_depths)
+                                                        lidar2img_rts, img_shapes,
+                                                        return_nhwc=True, lr_depths=lr_depths, 
+                                                        target_depths=target_depths, gt_mixture_weight=gt_mixture_weight)
                 interm_depths.append(interm_depths_norm)
 
         x = self.first_patch_expanding(x)
@@ -176,8 +178,9 @@ class CMTULIP(TULIP):
             if i == 0:
                 fuser_in = x.permute(0,3,1,2).contiguous()
                 x, interm_depths_norm = self.dec_fuser(fuser_in, img_feats, 
-                                        lidar2img_rts, img_shapes,
-                                        return_nhwc=True, lr_depths=lr_depths)
+                                                        lidar2img_rts, img_shapes,
+                                                        return_nhwc=True, lr_depths=lr_depths, 
+                                                        target_depths=target_depths, gt_mixture_weight=gt_mixture_weight)
                 interm_depths.append(interm_depths_norm)
         
         x = self.norm_up(x)
