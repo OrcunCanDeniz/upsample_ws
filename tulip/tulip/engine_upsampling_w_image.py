@@ -44,6 +44,11 @@ def enable_dropout(model):
 def evaluate(data_loader, model, device, log_writer, args=None):
     raise NotImplementedError("Please use MCdrop function for evaluation with MC Dropout")
 
+def cos_anneal(x, end_epoch=25):
+    if x > end_epoch:
+        return 0.0
+    y = (np.cos(-x*2*np.pi/(end_epoch*2)) + 1) * 0.5
+    return y
 
 def train_one_epoch(model: torch.nn.Module,
                     data_loader: Iterable,
@@ -71,7 +76,7 @@ def train_one_epoch(model: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, data in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        gt_mixture_weight = np.exp(-(epoch + data_iter_step / len(data_loader)) / 5)
+        gt_mixture_weight = cos_anneal(epoch + data_iter_step / len(data_loader))
         # we use a per iteration (instead of per epoch) lr scheduler
         cam_imgs = data[0]
         samples_low_res = data[1]
