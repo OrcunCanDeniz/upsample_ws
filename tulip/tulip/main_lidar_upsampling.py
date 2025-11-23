@@ -131,9 +131,10 @@ def main(args):
     if config.output_dir and not args.eval:
         global_rank = misc.get_rank()
         if global_rank == 0:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            original_output_dir = config.output_dir
-            config.output_dir = f"{original_output_dir}_{timestamp}"
+            if config.resume == "": # only add timestamp when not resuming from checkpoint
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                original_output_dir = config.output_dir
+                config.output_dir = f"{original_output_dir}_{timestamp}"
             Path(config.output_dir).mkdir(parents=True, exist_ok=True)
             print(f"Output directory: {config.output_dir}")
     elif config.output_dir and args.eval:

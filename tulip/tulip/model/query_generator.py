@@ -5,6 +5,7 @@ from einops import rearrange
 import torch
 from torch import nn
 import torch.nn.functional as F
+from .coord_conv import CoordConv2d
 import pdb
 
 ELEV_DEG_PER_RING_NUCSENES = torch.tensor([-30.67, -29.33, -28., -26.66, -25.33, -24., -22.67, -21.33,
@@ -41,9 +42,9 @@ class SimpleQueryGenerator(nn.Module):
         if not only_low_res:
             self.range_head = nn.Sequential(
                                             nn.GroupNorm(num_groups=8, num_channels=C_rv),
-                                            nn.Conv2d(C_rv, 64, kernel_size=3, padding=1, bias=False),
+                                            CoordConv2d(C_rv, 64, kernel_size=3, padding=1, bias=True),
                                             nn.SiLU(inplace=True),
-                                            nn.Conv2d(64, 1, kernel_size=1, bias=True)
+                                            nn.Conv2d(64, 1, kernel_size=1, bias=False)
                                         )
         else:
             self.save_in_rv_size = in_rv_size
@@ -65,7 +66,7 @@ class SimpleQueryGenerator(nn.Module):
         if self.num_q_per_latent_cell > 1:
             assert self.n_q_w == self.n_q_h, "Only symmetrical expanding supported"
             num_ups = int(math.log(self.n_q_w, 2))
-            up_layers = []
+            up_layers = [CoordConv2d(C_rv, C_rv, kernel_size=1, padding=0, bias=False)]
             # TODO Dropouts?
             for _ in range(num_ups):
                 up_layers.extend([
@@ -77,7 +78,7 @@ class SimpleQueryGenerator(nn.Module):
                 ])
             self.spatial_expand = nn.Sequential(*up_layers)
         
-        self.set_geometry()
+        self.set_geometry(True)
         self.low_res_index = range(0, 32, 4)
         
         if only_low_res:
@@ -103,22 +104,37 @@ class SimpleQueryGenerator(nn.Module):
                 nn.GELU(),
                 nn.Conv2d(in_channels=num_addit_ch, out_channels=num_addit_ch, kernel_size=(1, 1)),
             )
+        else:
+            self.ds_factor_h = 32 // self.in_Hrv
+            self.ds_factor_w = 1024 // self.in_Wrv
             
+            self.n_q_w = int(self.ds_factor_w)
+            self.n_q_h = int(self.ds_factor_h)
             
-    def set_geometry(self):
+            assert self.n_q_w == self.ds_factor_w, "ogW / inW must be int" 
+            assert self.n_q_h == self.ds_factor_h, "ogH / inH must be int" 
+            
+            self.num_q_per_latent_cell = self.n_q_w * self.n_q_h
+                 
+    def set_geometry(self, no_binning=False):
         # bin azimuths into Wrv bins
         assert self.n_q_w * self.in_Wrv <= self.og_Wrv, "Total number  of horizontal samples must be less than or equal to original width"
         az_line = torch.linspace(-math.pi, math.pi, self.og_Wrv + 1)[:-1]
         az_line += (az_line[1] - az_line[0])/2
-        self.az_binned_ = az_line.reshape(self.in_Wrv, self.n_q_w, -1)
-        self.process_az()
+        if no_binning:
+            self.az_per_q = az_line[None, :, None].repeat(self.og_Hrv, 1, 1) # (in_Hrv, in_Wrv, n_q_w)
+        else:
+            self.az_binned_ = az_line.reshape(self.in_Wrv, self.n_q_w, -1)
+            self.process_az()
 
         # bin elevations into Hrv bins
         assert self.n_q_h * self.in_Hrv <= self.og_Hrv, "Total number of vertical samples must be less than or equal to original height"
         elev = torch.deg2rad(ELEV_DEG_PER_RING_NUCSENES.flip(0))
-        self.elev_binned_ = elev.reshape(self.in_Hrv, self.n_q_h, -1)
-        self.process_elev()
-        
+        if no_binning:
+            self.elev_per_q = elev[:, None, None].repeat(1, self.og_Wrv, 1) # (in_Hrv, in_Wrv, n_q_h)
+        else:
+            self.elev_binned_ = elev.reshape(self.in_Hrv, self.n_q_h, -1)
+            self.process_elev()
         az = self.az_per_q # (in_Hrv, in_Wrv, n_q_w)
         elev = self.elev_per_q # (in_Hrv, in_Wrv, n_q_h)
         # compute unit vector per range view pixel 
@@ -177,21 +193,21 @@ class SimpleQueryGenerator(nn.Module):
         if not self.only_low_res:
             assert Hrv == self.og_Hrv and Wrv == self.og_Wrv, f"Input range view size {Hrv}x{Wrv} does not match expected size {self.og_Hrv}x{self.og_Wrv}"
         # Apply range head to each range view pixel
-        
-        with torch.no_grad():
-            lr_depths = lr_depths * self.rmax
-        
+
         if self.only_low_res:
             # if only low res gt preds will be used to generate points. no range prediction head
             interm_depths = lr_depths.unsqueeze(2)
             interm_depths_norm = None
         else:
             # range prediction is performed on spatially expanded features but still lr depths are scattered into predicted intermediate depths
-            interm_depths_norm = self.range_head(x_rv.detach()).sigmoid()  # normalized intermediate depth
-            interm_depths = (interm_depths_norm) * (1 - gt_mixture_weight) + target_depths.to(interm_depths.dtype) * gt_mixture_weight
+            interm_depths_norm = self.range_head(x_rv).sigmoid()  # normalized intermediate depth
+            if target_depths is not None:
+                interm_depths = (interm_depths_norm) * (1 - gt_mixture_weight) + target_depths.to(interm_depths_norm.dtype) * gt_mixture_weight
+            else:
+                interm_depths = interm_depths_norm.clone()
             interm_depths *= self.rmax
             interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype)
-            interm_depths = interm_depths.view(B, self.n_q_h, self.n_q_w, self.in_Hrv, self.in_Wrv).detach()
+            interm_depths = interm_depths.unsqueeze(1)
 
         x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
         y_l = (interm_depths * self.u_vec_y).flatten(1) # [B, n_total_q * Hrv * Wrv] 
@@ -199,7 +215,7 @@ class SimpleQueryGenerator(nn.Module):
         
         p_lidar_h = torch.stack([x_l, y_l, z_l], dim=-1)
         
-        return p_lidar_h, interm_depths_norm
+        return p_lidar_h.detach(), interm_depths_norm
         
         
     def forward(self, x_rv, tf_matrix=None, ret_feats=False, lr_depths=None, target_depths=None, gt_mixture_weight = 0.0):

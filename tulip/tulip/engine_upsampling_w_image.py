@@ -76,7 +76,7 @@ def train_one_epoch(model: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, data in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        gt_mixture_weight = cos_anneal(epoch + data_iter_step / len(data_loader))
+        gt_mixture_weight = 0.0
         # we use a per iteration (instead of per epoch) lr scheduler
         cam_imgs = data[0]
         samples_low_res = data[1]
@@ -118,12 +118,14 @@ def train_one_epoch(model: torch.nn.Module,
         metric_logger.update(loss=total_loss_value)
         metric_logger.update(pixel_loss=pixel_loss_value)
         metric_logger.update(interm_range_loss=range_head_loss_value)
+        metric_logger.update(gt_mixture_weight=gt_mixture_weight)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
         total_loss_value_reduce = misc.all_reduce_mean(total_loss_value)
         pixel_loss_value_reduce = misc.all_reduce_mean(pixel_loss_value)
+        gt_mixture_weight_reduce = misc.all_reduce_mean(gt_mixture_weight)
         range_head_loss_value_reduce = misc.all_reduce_mean(range_head_loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
@@ -133,6 +135,7 @@ def train_one_epoch(model: torch.nn.Module,
             log_writer.add_scalar('train_loss_total', total_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('train_loss_interm_depth', range_head_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('train_loss_pixel', pixel_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('gt_mixture_weight', gt_mixture_weight_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
 

@@ -17,7 +17,7 @@ from mmcv.cnn.bricks.registry import (ATTENTION,
 from mmcv.cnn.bricks.transformer import build_attention
 import math
 from mmcv.runner import force_fp32, auto_fp16
-
+# from .ppe import PointCoordEncoder
 from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
 from itertools import chain
 from mmcv.utils import ext_loader
@@ -70,6 +70,7 @@ class SpatialCrossAttention(BaseModule):
         self.num_cams = num_cams
         self.output_proj = nn.Linear(embed_dims, embed_dims)
         self.batch_first = batch_first
+        # self.pce = PointCoordEncoder(out_dim=embed_dims, dim=2)
         self.init_weight()
 
     def init_weight(self):

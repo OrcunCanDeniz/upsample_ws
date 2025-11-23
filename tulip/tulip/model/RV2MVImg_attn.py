@@ -9,6 +9,7 @@ from mmcv.cnn import build_norm_layer
 import math
 import numpy as np
 from .query_generator import SimpleQueryGenerator
+from .ppe import PointCoordEncoder
 import pdb
 
 
@@ -182,7 +183,7 @@ class RV2MVImgAttn(nn.Module):
         reference_points_cam, mask = self.point_sampling(points_lidar, lidar2img_rts, img_shapes)
         #   reference_points_cam: [B, num_cam, N, 1, 2]  (N=ogHrv*ogWrv)
         #   mask:                [B, num_cam, N, 1]
-        # SpatialCrossAttention expects [num_cam, B, N, K, 2] and mask [num_cam, B, N, K] K=1 for us
+        # SpatialCrossAttention expects [num_cam, B, N, 1, 2] and mask [num_cam, B, N, 1]
         reference_points_cam = reference_points_cam.permute(1, 0, 2, 3, 4).contiguous()
         
         mask = mask.permute(1, 0, 2, 3).contiguous()   # keep last singleton (K=1)
