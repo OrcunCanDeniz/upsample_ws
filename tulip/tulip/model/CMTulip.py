@@ -209,14 +209,12 @@ class CMTULIP(TULIP):
         range_heads_losses = [F.mse_loss(pred, target, reduction='mean') for pred in interm_depth_preds]
         rh_loss = sum(range_heads_losses)/len(range_heads_losses)
         
-        loss = loss + rh_loss 
-        
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
         else:
             pixel_loss = loss.clone()
         
-        # loss+=loss_kl
+        loss = loss + rh_loss 
 
         return loss, pixel_loss, rh_loss
     
