@@ -205,8 +205,8 @@ class SimpleQueryGenerator(nn.Module):
                 interm_depths = (interm_depths_norm) * (1 - gt_mixture_weight) + target_depths.to(interm_depths_norm.dtype) * gt_mixture_weight
             else:
                 interm_depths = interm_depths_norm.clone()
-            interm_depths *= self.rmax
             interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype)
+            interm_depths *= self.rmax
             interm_depths = interm_depths.unsqueeze(1)
 
         x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
