@@ -174,14 +174,14 @@ class CMTULIP(TULIP):
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
             x = self.skip_connection_layers[i](x)
-            x = layer(x)
-            if i == 0:
+            if i == 1:
                 fuser_in = x.permute(0,3,1,2).contiguous()
                 x, interm_depths_norm = self.dec_fuser(fuser_in, img_feats, 
                                                         lidar2img_rts, img_shapes,
                                                         return_nhwc=True, lr_depths=lr_depths, 
                                                         target_depths=target_depths, gt_mixture_weight=0)
                 interm_depths.append(interm_depths_norm)
+            x = layer(x)
         
         x = self.norm_up(x)
 
