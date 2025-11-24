@@ -44,8 +44,9 @@ class SimpleQueryGenerator(nn.Module):
                                             nn.GroupNorm(num_groups=8, num_channels=C_rv),
                                             CoordConv2d(C_rv, 64, kernel_size=3, padding=1, bias=True),
                                             nn.SiLU(inplace=True),
-                                            nn.Conv2d(64, 1, kernel_size=1, bias=False)
+                                            nn.Conv2d(64, 2, kernel_size=1, bias=True)
                                         )
+            self.offset_mult = nn.Parameter(torch.tensor([-1.0, 0.0, 1.0]), requires_grad=True)
         else:
             self.save_in_rv_size = in_rv_size
             in_rv_size = (32, 1024)
@@ -153,9 +154,17 @@ class SimpleQueryGenerator(nn.Module):
         u_vec_z = u_vec_z_grid.permute(3,2,0,1)# 
         u_vec = torch.stack([u_vec_x, u_vec_y, u_vec_z], dim=0)
         
-        u_vec_x = u_vec_x.unsqueeze(0).contiguous()
-        u_vec_y = u_vec_y.unsqueeze(0).contiguous()
-        u_vec_z = u_vec_z.unsqueeze(0).contiguous()
+        if not no_binning:
+            u_vec_x = u_vec_x.unsqueeze(0).contiguous()
+            u_vec_y = u_vec_y.unsqueeze(0).contiguous()
+            u_vec_z = u_vec_z.unsqueeze(0).contiguous()
+        else:
+            nqh, nqw, _, _ = u_vec_x.shape
+            assert nqh == 1 and nqw == 1, "When no binning, n_q_h and n_q_w must be 1"
+            u_vec_x = u_vec_x.squeeze(0).contiguous()
+            u_vec_y = u_vec_y.squeeze(0).contiguous()
+            u_vec_z = u_vec_z.squeeze(0).contiguous()
+            # only squeeze one dim to keep (1, in_Hrv, in_Wrv) shape, broadcastable to batch dim later
         self.register_buffer("u_vec_x", u_vec_x, persistent=False)
         self.register_buffer("u_vec_y", u_vec_y, persistent=False)
         self.register_buffer("u_vec_z", u_vec_z, persistent=False)
@@ -187,6 +196,7 @@ class SimpleQueryGenerator(nn.Module):
         Use forward() since it also handles spatial expanding if needed.
         
         x_rv: [B, Crv, Hrv, Wrv]
+        lr_depths: 0-1 ranged low resolution depth image fed as input to the model
         return: [B, Hrv* Wrv, 3]
         """
         B, Crv, Hrv, Wrv = x_rv.shape
@@ -200,22 +210,28 @@ class SimpleQueryGenerator(nn.Module):
             interm_depths_norm = None
         else:
             # range prediction is performed on spatially expanded features but still lr depths are scattered into predicted intermediate depths
-            interm_depths_norm = self.range_head(x_rv).sigmoid()  # normalized intermediate depth
+            rh_pred = self.range_head(x_rv)  # normalized intermediate depth
+            interm_depths_norm = torch.sigmoid(rh_pred[:, 0:1, :, :])  # [B, 1, Hrv, Wrv]
+            interm_depths_sigma = F.relu(rh_pred[:, 1:2, :, :])  # [B, 1, Hrv, Wrv]
+            
             if target_depths is not None:
                 interm_depths = (interm_depths_norm) * (1 - gt_mixture_weight) + target_depths.to(interm_depths_norm.dtype) * gt_mixture_weight
             else:
                 interm_depths = interm_depths_norm.clone()
-            interm_depths *= self.rmax
-            interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype)
-            interm_depths = interm_depths.unsqueeze(1)
+            interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype) # [B, 1, Hrv, Wrv]
+            sampled_depths = interm_depths + interm_depths_sigma * self.offset_mult.view(1, 3, 1, 1)  # [B, 3, Hrv, Wrv]
+            sampled_depths = torch.clamp(sampled_depths, 0.0, 1.0)
+            sampled_depths *= self.rmax
+            # interm_depths = interm_depths.unsqueeze(1)
 
-        x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
-        y_l = (interm_depths * self.u_vec_y).flatten(1) # [B, n_total_q * Hrv * Wrv] 
-        z_l = (interm_depths * self.u_vec_z).flatten(1) # [B, n_total_q * Hrv * Wrv] 
+        # [B, 3, Hrv, Wrv] * [1, 1, Hrv, Wrv] -> [B, 3, Hrv, Wrv]
+        x_l = (sampled_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
+        y_l = (sampled_depths * self.u_vec_y).flatten(1) # [B, n_total_q * Hrv * Wrv] 
+        z_l = (sampled_depths * self.u_vec_z).flatten(1) # [B, n_total_q * Hrv * Wrv] 
         
-        p_lidar_h = torch.stack([x_l, y_l, z_l], dim=-1)
+        p_lidar_h = torch.stack([x_l, y_l, z_l], dim=-1) # [B, n_total_q * Hrv * Wrv, 3]
         
-        return p_lidar_h.detach(), interm_depths_norm
+        return p_lidar_h.detach(), (interm_depths_norm, sampled_depths)
         
         
     def forward(self, x_rv, tf_matrix=None, ret_feats=False, lr_depths=None, target_depths=None, gt_mixture_weight = 0.0):

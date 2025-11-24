@@ -174,14 +174,14 @@ class CMTULIP(TULIP):
         for i, layer in enumerate(self.layers_up):
             x = torch.cat([x, x_save[len(x_save) - i - 2]], -1)
             x = self.skip_connection_layers[i](x)
-            x = layer(x)
-            if i == 0:
+            if i == 1:
                 fuser_in = x.permute(0,3,1,2).contiguous()
                 x, interm_depths_norm = self.dec_fuser(fuser_in, img_feats, 
                                                         lidar2img_rts, img_shapes,
                                                         return_nhwc=True, lr_depths=lr_depths, 
                                                         target_depths=target_depths, gt_mixture_weight=0)
                 interm_depths.append(interm_depths_norm)
+            x = layer(x)
         
         x = self.norm_up(x)
 
@@ -200,23 +200,36 @@ class CMTULIP(TULIP):
             total_loss, pixel_loss, range_head_loss = self.forward_loss(x, target, interm_depths)
             return x, total_loss, pixel_loss, range_head_loss
 
-    def forward_loss(self, pred, target, interm_depth_preds):
+    def forward_loss(self, final_pred, target, interm_depth_preds):
         # target is normalized by max_range
-        # interm_d_tensor = torch.cat(interm_depth_preds, dim=1)  # [B, n_heads, H, W]
-        loss = (pred - target).abs()
+        # interm_depth_preds = list[tensor(B, 3, H, W])]
+        loss = (final_pred - target).abs()
         loss = loss.mean()
+        alpha = 10
         
-        range_heads_losses = [F.mse_loss(pred, target, reduction='mean') for pred in interm_depth_preds]
+        # handle point sampling losses in for block
+        range_heads_losses = []
+        for pred in interm_depth_preds:
+            mean_pred_depth, sampled_depths = pred  # [B, 3, H, W], [B, 1, H, W]
+            # covarage loss
+            sampled_depths /= self.max_range
+            l1_per_pixel = (sampled_depths - target).abs()
+            weights = torch.softmax(-alpha * l1_per_pixel, dim=1)
+            l_multi_soft = (weights * l1_per_pixel).sum(dim=1)   # [B, H, W]
+            L_multi = l_multi_soft.mean()
+            # distr center loss
+            mu_l = F.mse_loss(mean_pred_depth, target, reduction='mean')
+            rh_l = mu_l + L_multi * 0.2
+            range_heads_losses.append(rh_l)
+        
         rh_loss = sum(range_heads_losses)/len(range_heads_losses)
-        
-        loss = loss + rh_loss 
         
         if self.log_transform:
             pixel_loss = (torch.expm1(pred) - torch.expm1(target)).abs().mean()
         else:
             pixel_loss = loss.clone()
         
-        # loss+=loss_kl
+        loss = loss + rh_loss 
 
         return loss, pixel_loss, rh_loss
     

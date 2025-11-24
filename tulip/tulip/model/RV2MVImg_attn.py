@@ -94,6 +94,12 @@ class RV2MVImgAttn(nn.Module):
             nn.Conv2d(embed_dims, embed_dims, 1, bias=True)
         )
         
+        self.multi_sample_q_agg = nn.Sequential(
+                                                nn.Linear(3 * embed_dims, embed_dims * 2),
+                                                nn.ReLU(),
+                                                nn.Linear(embed_dims * 2, embed_dims)
+                                            )
+                                            
         self.proj_out = nn.Sequential(
             nn.Linear(embed_dims, embed_dims), 
             nn.GELU(),
@@ -181,7 +187,7 @@ class RV2MVImgAttn(nn.Module):
         rv_feat = self.proj_q(rv_feat)
 
         reference_points_cam, mask = self.point_sampling(points_lidar, lidar2img_rts, img_shapes)
-        #   reference_points_cam: [B, num_cam, N, 1, 2]  (N=ogHrv*ogWrv)
+        #   reference_points_cam: [B, num_cam, N, 1, 2]  (N=ogHrv*ogWrv*3)
         #   mask:                [B, num_cam, N, 1]
         # SpatialCrossAttention expects [num_cam, B, N, 1, 2] and mask [num_cam, B, N, 1]
         reference_points_cam = reference_points_cam.permute(1, 0, 2, 3, 4).contiguous()
@@ -190,10 +196,12 @@ class RV2MVImgAttn(nn.Module):
 
         # attend per-latent-sample; if created multiple latent samples per RV cell flatten them here.
         query = rv_feat.flatten(2).transpose(1, 2)  # [B, N, C_rv], N must equal N used in point_sampling
-       
+        query = query.repeat_interleave(3, dim=1) # TODO: 3 point sampled per RV cell -> make configurable
         for layer in self.cross_modal_sca_layers:
             query = layer(query, img_feats, reference_points_cam, mask)
         
+        query = query.view(B, -1, 3, self.embed_dims).flatten(2)
+        query = self.multi_sample_q_agg(query)
         # query is in shape [B, N, C_rv]
         fused = self.proj_out(query)
 
