@@ -206,7 +206,7 @@ class CMTULIP(TULIP):
         loss = (pred - target).abs()
         loss = loss.mean()
         
-        range_heads_losses = [F.mse_loss(pred, target, reduction='mean') for pred in interm_depth_preds]
+        range_heads_losses = [F.l1_loss(pred, target, reduction='mean') for pred in interm_depth_preds]
         rh_loss = sum(range_heads_losses)/len(range_heads_losses)
         
         if self.log_transform:
