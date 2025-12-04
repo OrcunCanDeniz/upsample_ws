@@ -426,7 +426,9 @@ def main(args):
                 phase_two_weight_decay=config.backbone_weight_decay,
             )
 
-            optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
+            optimizer.param_groups.clear()
+            for g in param_groups:
+                optimizer.add_param_group(g)
             optimizer.zero_grad(set_to_none=True)
             two_phase_train = False
             
