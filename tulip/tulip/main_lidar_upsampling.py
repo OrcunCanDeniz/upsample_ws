@@ -201,8 +201,8 @@ def main(args):
         phase2_start = checkpoint.get('phase2_start', int(0.2 * config.epochs))
         start_from_p2 = checkpoint['epoch'] >= phase2_start     
     else:
-        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))   
-        start_from_p2 = False
+        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))  
+        start_from_p2 = phase2_start == 0
     print(f"Phase2 start epoch: {phase2_start}, Start from phase2: {start_from_p2}")
 
     # Logger is only used in one rank

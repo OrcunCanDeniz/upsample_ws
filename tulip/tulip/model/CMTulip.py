@@ -86,6 +86,10 @@ class CMTULIP(TULIP):
         
         print(f"Loading LSS weights from: {lss_weights_path}")
         
+        if not lss_weights_path:
+            print("WARNING: No LSS weights path provided, skipping loading.")
+            return False
+        
         if not os.path.exists(lss_weights_path):
             print(f"Error: LSS weights file not found: {lss_weights_path}")
             return False
