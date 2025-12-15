@@ -129,11 +129,14 @@ def main(args):
     
     # Add datetime timestamp to output_dir to ensure each run has distinct space
     if config.output_dir and not args.eval:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        original_output_dir = config.output_dir
-        config.output_dir = f"{original_output_dir}_{timestamp}"
-        Path(config.output_dir).mkdir(parents=True, exist_ok=True)
-        print(f"Output directory: {config.output_dir}")
+        global_rank = misc.get_rank()
+        if global_rank == 0:
+            if config.resume == "": # only add timestamp when not resuming from checkpoint
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                original_output_dir = config.output_dir
+                config.output_dir = f"{original_output_dir}_{timestamp}"
+            Path(config.output_dir).mkdir(parents=True, exist_ok=True)
+            print(f"Output directory: {config.output_dir}")
     elif config.output_dir and args.eval:
         # For evaluation, check if it's a specific checkpoint file or directory
         if config.output_dir.endswith("pth"):
@@ -162,28 +165,32 @@ def main(args):
 
     cudnn.benchmark = True
 
-    dataset_train = generate_dataset(is_train = True, args = config)
-    dataset_val = generate_dataset(is_train = False, args = config)
-
-    print(f"There are totally {len(dataset_train)} training data and {len(dataset_val)} validation data")
-
-
+    if not args.eval:
+        dataset_train = generate_dataset(is_train = True, args = config)
+        print(f"There are totally {len(dataset_train)} training data")
+    else:
+        dataset_val = generate_dataset(is_train = False, args = config)
+        print(f"There are totally {len(dataset_val)} validation data")
     
     if True:  # config.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
 
-        sampler_train = torch.utils.data.DistributedSampler(
-            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-        )
-        
-        # Validation set uses only one rank to write the summary
-        sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-        print("Sampler_train = %s" % str(sampler_train))
+        if not args.eval:
+            sampler_train = torch.utils.data.DistributedSampler(
+                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+            )
+            print("Sampler_train = %s" % str(sampler_train))
+        else: 
+            # Validation set uses only one rank to write the summary
+            sampler_val = torch.utils.data.DistributedSampler(
+                    dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+            print("Sampler_val = %s" % str(sampler_val))
     else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        if not args.eval:
+            sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        else:
+            sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     phase2_start = None
     start_from_p2 = False
@@ -194,8 +201,8 @@ def main(args):
         phase2_start = checkpoint.get('phase2_start', int(0.2 * config.epochs))
         start_from_p2 = checkpoint['epoch'] >= phase2_start     
     else:
-        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))   
-        start_from_p2 = False
+        phase2_start = getattr(config, "phase2_start", int(0.2 * config.epochs))  
+        start_from_p2 = phase2_start == 0
     print(f"Phase2 start epoch: {phase2_start}, Start from phase2: {start_from_p2}")
 
     # Logger is only used in one rank
@@ -257,26 +264,25 @@ def main(args):
     else:
         log_writer = None
 
-
-    data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_mem,
-        drop_last=True,
-        collate_fn=collate_func,
-        persistent_workers=True
-    )
-
-
-    data_loader_val = torch.utils.data.DataLoader(
-        dataset_val, sampler=sampler_val,
-        batch_size=1,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_mem,
-        drop_last=False,
-        collate_fn=collate_func
-    )
+    if not args.eval:
+        data_loader_train = torch.utils.data.DataLoader(
+            dataset_train, sampler=sampler_train,
+            batch_size=config.batch_size,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_mem,
+            drop_last=True,
+            collate_fn=collate_func,
+            persistent_workers=True
+        )
+    else:
+        data_loader_val = torch.utils.data.DataLoader(
+            dataset_val, sampler=sampler_val,
+            batch_size=1,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_mem,
+            drop_last=False,
+            collate_fn=collate_func
+        )
     
     
     # define the model
@@ -420,7 +426,9 @@ def main(args):
                 phase_two_weight_decay=config.backbone_weight_decay,
             )
 
-            optimizer = torch.optim.AdamW(param_groups, lr=config.lr, betas=(0.9, 0.95))
+            optimizer.param_groups.clear()
+            for g in param_groups:
+                optimizer.add_param_group(g)
             optimizer.zero_grad(set_to_none=True)
             two_phase_train = False
             

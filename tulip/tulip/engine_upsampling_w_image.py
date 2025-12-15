@@ -44,6 +44,11 @@ def enable_dropout(model):
 def evaluate(data_loader, model, device, log_writer, args=None):
     raise NotImplementedError("Please use MCdrop function for evaluation with MC Dropout")
 
+def cos_anneal(x, end_epoch=25):
+    if x > end_epoch:
+        return 0.0
+    y = (np.cos(-x*2*np.pi/(end_epoch*2)) + 1) * 0.5
+    return y
 
 def train_one_epoch(model: torch.nn.Module,
                     data_loader: Iterable,
@@ -61,6 +66,9 @@ def train_one_epoch(model: torch.nn.Module,
     print_freq = 20
 
     accum_iter = args.accum_iter
+    base = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+    # if epoch in (5, 10, 50):
+    #     base.range_head_weight.mul_(0.5)   # Decrease range head weight
 
     optimizer.zero_grad()
 
@@ -68,29 +76,28 @@ def train_one_epoch(model: torch.nn.Module,
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, data in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-
+        gt_mixture_weight = 0.0
         # we use a per iteration (instead of per epoch) lr scheduler
         cam_imgs = data[0]
-        mats_dict = data[1]
-        timestamps = data[2]
-        img_metas = data[3]
-        samples_low_res = data[4]
-        samples_high_res = data[5]
+        samples_low_res = data[1]
+        samples_high_res = data[2]
+        lidar2img_rts = data[3]
+        img_shapes = data[4]
         
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
         
         samples_low_res = samples_low_res.to(device, non_blocking=True)
         samples_high_res = samples_high_res.to(device, non_blocking=True)
-
-
+        lidar2img_rts = lidar2img_rts.to(device, non_blocking=True)
+        img_shapes = img_shapes.to(device, non_blocking=True)
+        
         with torch.cuda.amp.autocast():
-            _, total_loss, pixel_loss = model(samples_low_res, cam_imgs, 
-                                              mats_dict, timestamps, samples_high_res)
+            _, total_loss, pixel_loss, range_head_loss = model(samples_low_res, cam_imgs, lidar2img_rts, img_shapes, samples_high_res)
 
         total_loss_value = total_loss.item()
         pixel_loss_value = pixel_loss.item()
-
+        range_head_loss_value = range_head_loss.item()
         if not math.isfinite(total_loss_value):
             print("Total Loss is {}, stopping training".format(total_loss_value))
             print("Pixel Loss is {}, stopping training".format(pixel_loss_value))
@@ -109,21 +116,26 @@ def train_one_epoch(model: torch.nn.Module,
         torch.cuda.synchronize()
 
         metric_logger.update(loss=total_loss_value)
+        metric_logger.update(pixel_loss=pixel_loss_value)
+        metric_logger.update(interm_range_loss=range_head_loss_value)
+        metric_logger.update(gt_mixture_weight=gt_mixture_weight)
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
 
-        if args.log_transform or args.depth_scale_loss:
-            total_loss_value_reduce = misc.all_reduce_mean(total_loss_value)
+        total_loss_value_reduce = misc.all_reduce_mean(total_loss_value)
         pixel_loss_value_reduce = misc.all_reduce_mean(pixel_loss_value)
+        gt_mixture_weight_reduce = misc.all_reduce_mean(gt_mixture_weight)
+        range_head_loss_value_reduce = misc.all_reduce_mean(range_head_loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
-            if args.log_transform or args.depth_scale_loss:
-                log_writer.add_scalar('train_loss_total', total_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('train_loss_total', total_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('train_loss_interm_depth', range_head_loss_value_reduce, epoch_1000x)
             log_writer.add_scalar('train_loss_pixel', pixel_loss_value_reduce, epoch_1000x)
+            log_writer.add_scalar('gt_mixture_weight', gt_mixture_weight_reduce, epoch_1000x)
             log_writer.add_scalar('lr', lr, epoch_1000x)
 
 
@@ -169,22 +181,19 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                           'precision':[],
                           'recall':[],
                           'f1':[]}
-
     for batch in tqdm.tqdm(data_loader):
 
-
         cam_imgs = batch[0]
-        mats_dict = batch[1]
-        timestamps = batch[2]
-        img_metas = batch[3]
-        images_low_res = batch[4]
-        images_high_res = batch[5]
+        images_low_res = batch[1]
+        images_high_res = batch[2]
+        lidar2img_rts = batch[3]
+        img_shapes = batch[4]
         
         images_low_res = images_low_res.to(device, non_blocking=True)
         images_high_res = images_high_res.to(device, non_blocking=True)
+        lidar2img_rts = lidar2img_rts.to(device, non_blocking=True)
+        img_shapes = img_shapes.to(device, non_blocking=True)
         cam_imgs = cam_imgs.to(device, non_blocking=True)
-        mats_dict = {k: v.to(device, non_blocking=True) for k, v in mats_dict.items()}
-        timestamps = timestamps.to(device, non_blocking=True)
         
         global_step += 1
         # compute output
@@ -195,14 +204,18 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             for i in range(int(np.ceil(iteration / iteration_batch))):
                 input_batch = iteration_batch if (iteration-i*iteration_batch) > iteration_batch else (iteration-i*iteration_batch)
                 test_imgs_input = torch.tile(images_low_res, (input_batch, 1, 1, 1))
-                
+                cam_imgs_batch = torch.tile(cam_imgs, (input_batch, 1, 1, 1, 1, 1))
+                lidar2img_rts_batch = torch.tile(lidar2img_rts, (input_batch, 1, 1, 1))
+                img_shapes_batch = torch.tile(img_shapes, (input_batch, 1))
 
-                pred_imgs = model(test_imgs_input, cam_imgs, 
-                                mats_dict, timestamps,
-                                target=images_high_res, 
-                                mc_drop = True) 
+                # print all input tensors shapes
+                with torch.no_grad():
+                    pred_imgs = model(test_imgs_input, cam_imgs_batch, 
+                                    lidar2img_rts_batch, img_shapes_batch,
+                                    target=images_high_res, 
+                                    mc_drop=True) 
                 
-                pred_img_iteration[i*iteration_batch:i*iteration_batch+input_batch, ...] = pred_imgs
+                pred_img_iteration[i*iteration_batch:i*iteration_batch+input_batch, ...] = pred_imgs[:, 0:1, ...]
             pred_img = torch.mean(pred_img_iteration, dim = 0, keepdim = True)
             pred_img_var = torch.std(pred_img_iteration, dim = 0, keepdim = True)
             noise_removal = pred_img_var > noise_threshold * pred_img
@@ -225,7 +238,7 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "nuscenes_with_image":
-                pred_img = torch.where((pred_img >= 0) & (pred_img <= 55/80), pred_img, 0)
+                pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             
@@ -272,8 +285,8 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pred_img[low_res_index, :] = images_low_res
                 
                 # 3D Evaluation Metrics
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)# max range is 55/80, argument(80) is just denormalization factor
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
+                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 55)
+                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 55)
                 
 
             elif args.dataset_select == "kitti":
