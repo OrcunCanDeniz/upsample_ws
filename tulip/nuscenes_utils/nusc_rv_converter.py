@@ -23,7 +23,6 @@ class NuScenesPointCloudToRangeImage:
 
     def __init__(self,
                  min_depth=0.0,
-                 max_depth=100.0,
                  flip_vertical=True,
                  intensity_clip=None,
                  add_channel_dim=True):
@@ -32,7 +31,7 @@ class NuScenesPointCloudToRangeImage:
         self.width = int(width)
         self.height = int(height) if height is not None else None
         self.min_depth = float(min_depth)
-        self.max_depth = float(max_depth)
+        # self.max_depth = float(max_depth)
         self.flip_vertical = bool(flip_vertical)
         self.intensity_clip = intensity_clip
         self.add_channel_dim = bool(add_channel_dim)
@@ -54,7 +53,7 @@ class NuScenesPointCloudToRangeImage:
 
         # Range and masks
         r = np.sqrt(x*x + y*y + z*z, dtype=np.float32)
-        depth_mask = (r >= self.min_depth) & (r <= self.max_depth) & np.isfinite(r)
+        depth_mask = (r >= self.min_depth) & np.isfinite(r)
         ring_mask = (ring >= 0) & (ring < H)
         valid = depth_mask & ring_mask
         if not np.any(valid):

@@ -3,7 +3,7 @@ import numpy as np
 import os
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils import splits
-from sample_nuscenes_dataset import NuScenesPointCloudToRangeImage
+from nusc_rv_converter import NuScenesPointCloudToRangeImage
 from tqdm import tqdm
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from skimage.measure import block_reduce
