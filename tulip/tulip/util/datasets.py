@@ -407,8 +407,8 @@ class RVWithImageDataset(Dataset):
         np_data = self.loader(rv_path)
         rv_sample = np_data[..., 0]
         mask_sample = np_data[..., -1]
-        range_mask = np.logical_and(rv_sample >= self.min_range, rv_sample <= self.max_range)
-        mask_sample = np.logical_and(mask_sample, range_mask) # pixel should satisfy both range and mask
+        # range_mask = np.logical_and(rv_sample >= self.min_range, rv_sample <= self.max_range)
+        # mask_sample = np.logical_and(mask_sample, range_mask) # pixel should satisfy both range and mask
         # Load precomputed range_head_target from disk instead of computing on-the-fly
         # head_target_rel = sample_info['lidar_info'].get('range_head_target_path')
         # if head_target_rel is None:
@@ -532,9 +532,9 @@ class RangeMapFolder(DatasetFolder):
 def build_nuscenes_upsampling_dataset(is_train, args):
     input_size = (8,1024)
     output_size = (32,1024)
-    
-    t_low_res = [transforms.ToTensor(), ScaleTensor(1/80), FilterInvalidPixels(min_range = 0, max_range = 55/80)]
-    t_high_res = [transforms.ToTensor(), ScaleTensor(1/80), FilterInvalidPixels(min_range = 0, max_range = 55/80)]
+    max_scaler = 80
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=1)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=1)]
 
     t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0],))
     if output_size[1] // input_size[1] > 1:
@@ -562,11 +562,11 @@ def build_nuscenes_upsampling_dataset(is_train, args):
 def build_nuscenes_w_image_upsampling_dataset(is_train, args):
     input_size = (8,1024)
     output_size = (32,1024)
-    
-    t_low_res = [transforms.ToTensor(), ScaleTensor(1/55)]
-    t_high_res = [transforms.ToTensor(), ScaleTensor(1/55)]
+    max_scaler = 80
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
 
-    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0],))
+    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0]))
     if output_size[1] // input_size[1] > 1:
         t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
 
