@@ -3,7 +3,7 @@ import numpy as np
 import os
 from nuscenes.nuscenes import NuScenes
 from nuscenes.utils import splits
-from sample_nuscenes_dataset import NuScenesPointCloudToRangeImage
+from nusc_rv_converter import NuScenesPointCloudToRangeImage
 from tqdm import tqdm
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from skimage.measure import block_reduce
@@ -31,8 +31,7 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
     os.makedirs(split_head_target_dir, exist_ok=True)
     print(f"Created directory: {split_rv_dir}")
     
-    converter = NuScenesPointCloudToRangeImage( min_depth=0.0,
-                                                max_depth=55.0 )
+    converter = NuScenesPointCloudToRangeImage( min_depth=0.0 )
     lidar_name = 'LIDAR_TOP'
     infos = list()
     for cur_scene in tqdm(nusc.scene):
@@ -92,12 +91,12 @@ def generate_info(nusc, scenes, split_name, data_root, max_cam_sweeps=1, max_lid
             lidar_data = nusc.get('sample_data',
                                     cur_sample['data'][lidar_name])
             # pdb.set_trace()
-            # lidar_pts = np.fromfile(f"{nusc.dataroot}/{lidar_data['filename']}", dtype=np.float32).reshape(-1, 5)
+            lidar_pts = np.fromfile(f"{nusc.dataroot}/{lidar_data['filename']}", dtype=np.float32).reshape(-1, 5)
             # Convert to range image using the new converter
             rv_out_name = lidar_data['filename'].split('.')[0] + '_RV.npy'
             rv_out_path = os.path.join(split_rv_dir, rv_out_name.split('/')[-1])
-            # range_intensity_map = converter(lidar_pts)
-            # np.save(rv_out_path, range_intensity_map.astype(np.float32))
+            range_intensity_map = converter(lidar_pts)
+            np.save(rv_out_path, range_intensity_map.astype(np.float32))
             
             # range_head_target = create_depth_target(range_intensity_map[...,0], range_intensity_map[..., -1].astype(np.bool))
             head_target_out_path = os.path.join(split_head_target_dir, rv_out_name.split('/')[-1])
