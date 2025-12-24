@@ -44,45 +44,25 @@ class PointCoordEncoder(nn.Module):
         h = out_dim if hidden_dim is None else hidden_dim
 
         self.mlp = nn.Sequential(
-            nn.Linear(in_dim, h, bias=True),
+            nn.Conv2d(in_dim, h, 1, bias=True),
             nn.ReLU(inplace=True),
-            nn.Linear(h, out_dim, bias=True),
+            nn.Conv2d(h, out_dim, 1, bias=True),
         )
 
         # Precompute frequency vector (registered as buffer for device moves)
         freqs = (freq_base ** torch.arange(self.L)).float()
         if use_pi:
             freqs = math.pi * freqs
-        self.register_buffer("freqs", freqs, persistent=False)
+        self.register_buffer("freqs", freqs[None, :, None, None], persistent=False)
 
     def sine_encode_1d(self, t: torch.Tensor) -> torch.Tensor:
         """
         t: [B, N, 1]  ->  [B, N, 2L] via sin/cos at exponentially spaced freqs.
         """
-        # [B, N, 1] x [L] -> [B, N, L]
         angles = t * self.freqs  # broadcast
-        return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)  # [B, N, 2L]
+        ret = torch.cat([torch.sin(angles), torch.cos(angles)], dim=1)  # [B, 2L, H, W]
+        return ret
 
-    def forward(self, points: torch.Tensor) -> torch.Tensor:
-        """
-        points: [B, N, 3] in LiDAR or normalized coordinates (your choice upstream).
-        """
-        if points.ndim != 3 or points.size(-1) != self.dim:
-            raise ValueError(f"Expected [B, N, {self.dim}], got {tuple(points.shape)}")
-
-        if self.dim == 3:
-            x, y, z = points[..., 0:1], points[..., 1:2], points[..., 2:3]  # [B,N,1] each
-            ex = self.sine_encode_1d(x)  # [B,N,2L]
-            ey = self.sine_encode_1d(y)
-            ez = self.sine_encode_1d(z)
-            enc = torch.cat([ex, ey, ez], dim=-1)  # [B, N, 6L] == [B, N, 3C/2]
-        elif self.dim == 2:
-            x, y = points[..., 0:1], points[..., 1:2]  # [B,N,1] each
-            ex = self.sine_encode_1d(x)  # [B,N,2L]
-            ey = self.sine_encode_1d(y)
-            enc = torch.cat([ex, ey], dim=-1)  # [B, N, 4L] == [B, N, 2C/2]
-        elif self.dim == 1:
-            x = points[..., 0:1]  # [B,N,1]
-            enc = self.sine_encode_1d(x)  # [B,N,2L]
-
-        return self.mlp(enc).transpose(1, 2) # [B, C, N]
+    def forward(self, x: torch.Tensor) -> torch.Tensor: 
+        enc = self.sine_encode_1d(x)  # [B,N,2L]
+        return self.mlp(enc) # [B, C, N]
