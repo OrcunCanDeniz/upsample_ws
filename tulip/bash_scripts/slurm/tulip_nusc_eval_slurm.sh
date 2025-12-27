@@ -1,6 +1,6 @@
 #!/bin/bash -l 
 #SBATCH --export=ALL
-#SBATCH --job-name=CMTULIP_eval               # your job name
+#SBATCH --job-name=TULIP_eval               # your job name
 #SBATCH --nodes=1                          # 1 node
 #SBATCH --ntasks-per-node=1                # one srun task per node
 #SBATCH --gres=gpu:100:1               # 8 GPUs on that node
@@ -62,4 +62,4 @@ export APPTAINERENV_USE_WORK="1"
 apptainer exec --nv \
   --bind "${BIND_LIST}" \
   "${SIF_IMAGE}" \
-  bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 && cd "$CODE_DIR" && ./bash_scripts/cmtulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}" eval'
+  bash -lc 'source /opt/conda/etc/profile.d/conda.sh && conda activate py38 && cd "$CODE_DIR" && ./bash_scripts/tulip_upsampling_nusc.sh "${SLURM_GPUS_ON_NODE}" eval'
