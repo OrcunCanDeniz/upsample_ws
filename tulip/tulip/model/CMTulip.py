@@ -61,7 +61,7 @@ class CMTULIP(TULIP):
         self.apply(self.init_weights)
         self.multiview_backbone = ImageBackbone(backbone_config)
         self.load_lss_weights(lss_weights_path)
-        self.max_range = 55.0
+        self.max_range = 80.0
         num_img_feat_lvl = backbone_config.img_neck_conf.get('num_outs', 4)
         self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, 
                                       num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),

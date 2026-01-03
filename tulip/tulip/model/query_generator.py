@@ -27,7 +27,7 @@ class SimpleQueryGenerator(nn.Module):
                         If False, range prediction head is used to generate intermediate depths, with resolution of og_rv_size.
     """
     def __init__(self,
-                 rmax=51.2,
+                 rmax,
                  C_rv=384,
                  in_rv_size=(2,64),
                  og_rv_size=(32,1024),
@@ -204,14 +204,14 @@ class SimpleQueryGenerator(nn.Module):
             if target_depths is not None:
                 interm_depths = (interm_depths_norm) * (1 - gt_mixture_weight) + target_depths.to(interm_depths_norm.dtype) * gt_mixture_weight
             else:
-                interm_depths = interm_depths_norm.clone()
+                interm_depths = interm_depths_norm.clone().float()
             interm_depths[:, :, self.low_res_index, :] = lr_depths.to(interm_depths.dtype)
-            interm_depths *= self.rmax
+            interm_depths *= float(self.rmax)
             interm_depths = interm_depths.unsqueeze(1)
 
-        x_l = (interm_depths * self.u_vec_x).flatten(1) # [B, n_total_q * Hrv * Wrv] 
-        y_l = (interm_depths * self.u_vec_y).flatten(1) # [B, n_total_q * Hrv * Wrv] 
-        z_l = (interm_depths * self.u_vec_z).flatten(1) # [B, n_total_q * Hrv * Wrv] 
+        x_l = (interm_depths * self.u_vec_x).float().flatten(1) # [B, n_total_q * Hrv * Wrv] 
+        y_l = (interm_depths * self.u_vec_y).float().flatten(1) # [B, n_total_q * Hrv * Wrv] 
+        z_l = (interm_depths * self.u_vec_z).float().flatten(1) # [B, n_total_q * Hrv * Wrv] 
         
         p_lidar_h = torch.stack([x_l, y_l, z_l], dim=-1)
         
