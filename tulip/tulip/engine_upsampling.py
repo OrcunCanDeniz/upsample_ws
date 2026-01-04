@@ -444,11 +444,11 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             elif args.dataset_select == "kitti":
                 pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "nuscenes":
-                pred_img = torch.where((pred_img >= 0) & (pred_img <= 55/80), pred_img, 0)
+                pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
             else:
                 print("Not Preprocess the pred image")
             
-            loss_map = (pred_img -images_high_res).abs()
+            loss_map = (pred_img - images_high_res).abs()
             pixel_loss_one_input = loss_map.mean()
         
             
@@ -457,10 +457,10 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
             pred_img = pred_img.permute(0, 2, 3, 1).squeeze()
 
             
-
-            images_high_res = images_high_res.detach().cpu().numpy()
-            pred_img = pred_img.detach().cpu().numpy()
-            images_low_res = images_low_res.detach().cpu().numpy()
+            if args.dataset_select != "nuscenes":
+                images_high_res = images_high_res.detach().cpu().numpy()
+                pred_img = pred_img.detach().cpu().numpy()
+                images_low_res = images_low_res.detach().cpu().numpy()
 
             if args.dataset_select == "carla":
                 if tuple(args.img_size_low_res)[1] != tuple(args.img_size_high_res)[1]:
@@ -515,31 +515,43 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pcd_gt = img_to_pcd_durlar(images_high_res)
                 
             elif args.dataset_select == "nuscenes":
+                rmax = 80
                 low_res_index = range(0, h_high_res, downsampling_factor)
                 pred_low_res_part = pred_img[low_res_index, :]
-                loss_low_res_part = np.abs(pred_low_res_part - images_low_res)
-                loss_low_res_part = loss_low_res_part.mean()
+                loss_low_res_part = torch.abs(pred_low_res_part - images_low_res)
+                loss_low_res_part = torch.mean(loss_low_res_part)
                 pred_img[low_res_index, :] = images_low_res
-                pcd_pred = img_to_pcd_nuscenes(pred_img, maximum_range= 80)
-                pcd_gt = img_to_pcd_nuscenes(images_high_res, maximum_range = 80)
+                pcd_pred = img_to_pcd_nuscenes_torch(pred_img, maximum_range = rmax).squeeze(0)
+                pcd_gt = img_to_pcd_nuscenes_torch(images_high_res, maximum_range = rmax).squeeze(0)
             
             else:
                 raise NotImplementedError(f"Cannot find the dataset: {args.dataset_select}")
 
-            pcd_all = np.vstack((pcd_pred, pcd_gt))
+            if args.dataset_select != "nuscenes":
+                pcd_all = np.vstack((pcd_pred, pcd_gt))
 
-            chamfer_dist = chamfer_distance(pcd_gt, pcd_pred)
-            min_coord = np.min(pcd_all, axis=0)
-            max_coord = np.max(pcd_all, axis=0)
-            
-            # Voxelize the ground truth and prediction point clouds
-            voxel_grid_predicted = voxelize_point_cloud(pcd_pred, grid_size, min_coord, max_coord)
-            voxel_grid_ground_truth = voxelize_point_cloud(pcd_gt, grid_size, min_coord, max_coord)
-            # Calculate metrics
-            iou, precision, recall = calculate_metrics(voxel_grid_predicted, voxel_grid_ground_truth)
+                chamfer_dist = chamfer_distance(pcd_gt, pcd_pred)
+                min_coord = np.min(pcd_all, axis=0)
+                max_coord = np.max(pcd_all, axis=0)
+                
+                # Voxelize the ground truth and prediction point clouds
+                voxel_grid_predicted = voxelize_point_cloud(pcd_pred, grid_size, min_coord, max_coord)
+                voxel_grid_ground_truth = voxelize_point_cloud(pcd_gt, grid_size, min_coord, max_coord)
+                # Calculate metrics
+                iou, precision, recall = calculate_metrics(voxel_grid_predicted, voxel_grid_ground_truth)
+            else:
+                chamfer_dist = chamfer_distance_gpu(pcd_pred, pcd_gt)
+                pcd_all = torch.cat([pcd_pred, pcd_gt], dim=0)  # (B, N1+N2, 3)
+                min_coord = torch.min(pcd_all, dim=0)[0]         # (B, 3)
+                max_coord = torch.max(pcd_all, dim=0)[0]         # (B, 3)
+                voxel_grid_predicted = voxelize_point_cloud_torch(pcd_pred, grid_size, min_coord, max_coord)
+                voxel_grid_ground_truth = voxelize_point_cloud_torch(pcd_gt, grid_size, min_coord, max_coord)
+                iou, precision, recall = calculate_metrics_torch(voxel_grid_predicted, voxel_grid_ground_truth)
+                iou = iou.item()
+                precision = precision.item()
+                recall = recall.item()
 
             f1 = 2 * (precision * recall) / (precision + recall)
-
             evaluation_metrics['mae'].append(pixel_loss_one_input.item())
             evaluation_metrics['chamfer_dist'].append(chamfer_dist.item())
             evaluation_metrics['iou'].append(iou)
@@ -553,6 +565,10 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 loss_map_normalized = loss_map_normalized.detach().cpu().numpy()
                 loss_map_normalized = scalarMap_loss_map.to_rgba(loss_map_normalized)[..., :3]
 
+                if images_high_res.device != 'cpu':
+                    images_high_res = images_high_res.detach().cpu().numpy()
+                    pred_img = pred_img.detach().cpu().numpy()
+                
                 images_high_res = scalarMap.to_rgba(images_high_res)[..., :3]
                 pred_img = scalarMap.to_rgba(pred_img)[..., :3]
                 vis_grid = make_grid([torch.Tensor(images_high_res).permute(2, 0, 1), 
