@@ -119,7 +119,7 @@ def main(args):
     
     collate_func = None
     if config.model_select == "CMTULIP":
-        from engine_upsampling_w_image import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop
+        from engine_upsampling_w_image import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop, PCD_MCdrop
         im2col_step = get_config_value(config, 'batch_size') * 6 # assuming cam 6 views
         config.im2col_step = im2col_step
         
@@ -331,7 +331,10 @@ def main(args):
         print("Start Evaluation")
         if config.mc_drop:
             print("Evaluation with Monte Carlo Dropout")
-            MCdrop(data_loader_val, model, device, log_writer = log_writer, args = config)
+            if config.save_pcd:
+                PCD_MCdrop(data_loader_val, model, device, log_writer = log_writer, args = config)
+            else:
+                MCdrop(data_loader_val, model, device, log_writer = log_writer, args = config)
         else:
             evaluate(data_loader_val, model, device, log_writer = log_writer, args = config)
         print("Evaluation finished")

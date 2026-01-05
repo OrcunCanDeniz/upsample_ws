@@ -451,6 +451,7 @@ def collate_fn(data):
     hr_rv_samples_batch = list()
     sweep_lidar2img_rts_batch = list()
     img_shapes_batch = list()
+    tokens_batch = list()
     for iter_data in data:
         (
             sweep_imgs,
@@ -471,12 +472,14 @@ def collate_fn(data):
         hr_rv_samples_batch.append(hr_rv_sample)
         sweep_lidar2img_rts_batch.append(sweep_lidar2img_rts)
         img_shapes_batch.append(img_shape)
+        tokens_batch.append(sample_token)
     ret_list = [
         torch.stack(imgs_batch).contiguous(),
         torch.stack(lr_rv_samples_batch).contiguous(),
         torch.stack(hr_rv_samples_batch).contiguous(),
         torch.stack(sweep_lidar2img_rts_batch).contiguous(),
         torch.stack(img_shapes_batch).contiguous(),
+        tokens_batch
     ]
 
     return ret_list
