@@ -106,13 +106,6 @@ ENV LD_LIBRARY_PATH= \
     NVCC_PREPEND_FLAGS= \
     TORCH_NVCC_FLAGS=
 
-
-COPY ./BEVDepth /workspace/BEVDepth
-
-RUN conda activate py38 && \
-    cd /workspace/BEVDepth && \
-    pip install -e .
-
 RUN echo "conda activate py38" >> ~/.bashrc
 
 # Entry point (same as main Dockerfile)
