@@ -125,7 +125,7 @@ def main(args):
         
         collate_func = collate_fn
     else:
-        from engine_upsampling import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop
+        from engine_upsampling import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop, PCD_MCdrop
     
     # Add datetime timestamp to output_dir to ensure each run has distinct space
     if config.output_dir and not args.eval:

@@ -637,6 +637,174 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
         log_writer.add_scalar('Metrics/test_average_precision', total_precision/global_step, 0)
         log_writer.add_scalar('Metrics/test_average_recall', total_recall/global_step, 0)
 
+# TODO: MC Drop
+@torch.no_grad()
+def PCD_MCdrop(data_loader, model, device, log_writer, args=None):
+    '''Evaluation without Monte Carlo Dropout'''
+
+    iteration = args.num_mcdropout_iterations
+    iteration_batch = 8
+    noise_threshold = args.noise_threshold
+
+    assert iteration > iteration_batch 
+    # metric_logger = misc.MetricLogger(delimiter="  ")
+    header = 'Test:'
+    h_low_res = tuple(args.img_size_low_res)[0]
+    h_high_res = tuple(args.img_size_high_res)[0]
+
+    downsampling_factor = h_high_res // h_low_res
+
+    # keep model in train mode to enable Dropout
+    model.eval()
+    enable_dropout(model)
+
+    grid_size = args.grid_size
+
+    for batch in tqdm.tqdm(data_loader):
+        images_low_res = batch[0]['sample'] # (B=1, C, H, W)
+        images_high_res = batch[1]['sample'] # (B=1, C, H, W)
+        image_file_name = os.path.splitext(batch[0]['name'])[0]
+        
+        images_low_res = images_low_res.to(device, non_blocking=True)
+        images_high_res = images_high_res.to(device, non_blocking=True)
+        global_step += 1
+        # compute output
+
+        with torch.cuda.amp.autocast():
+            
+            pred_img_iteration = torch.empty(iteration, images_high_res.shape[1], images_high_res.shape[2], images_high_res.shape[3]).to(device)
+            for i in range(int(np.ceil(iteration / iteration_batch))):
+                input_batch = iteration_batch if (iteration-i*iteration_batch) > iteration_batch else (iteration-i*iteration_batch)
+                test_imgs_input = torch.tile(images_low_res, (input_batch, 1, 1, 1))
+                
+
+                pred_imgs = model(test_imgs_input, 
+                                images_high_res, 
+                                mc_drop = True) 
+                
+                pred_img_iteration[i*iteration_batch:i*iteration_batch+input_batch, ...] = pred_imgs
+            pred_img = torch.mean(pred_img_iteration, dim = 0, keepdim = True)
+            pred_img_var = torch.std(pred_img_iteration, dim = 0, keepdim = True)
+            noise_removal = pred_img_var > noise_threshold * pred_img
+            
+            pred_img[noise_removal] = 0
+
+        if args.log_transform:
+            pred_img = torch.expm1(pred_img)
+            images_high_res = torch.expm1(images_high_res)
+            images_low_res = torch.expm1(images_low_res)
+        
+
+            # Preprocess the image
+        if args.dataset_select == "carla":
+            pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
+        elif args.dataset_select == "durlar":
+            pred_img = torch.where((pred_img >= 0.3/120) & (pred_img <= 1), pred_img, 0)
+        elif args.dataset_select == "kitti":
+            pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
+        elif args.dataset_select == "nuscenes":
+            pred_img = torch.where((pred_img >= 0/80) & (pred_img <= 1), pred_img, 0)
+        else:
+            print("Not Preprocess the pred image")
+        
+        images_high_res = images_high_res.permute(0, 2, 3, 1).squeeze()
+        images_low_res = images_low_res.permute(0, 2, 3, 1).squeeze()
+        pred_img = pred_img.permute(0, 2, 3, 1).squeeze()
+
+        if args.dataset_select != "nuscenes":
+            images_high_res = images_high_res.detach().cpu().numpy()
+            pred_img = pred_img.detach().cpu().numpy()
+            images_low_res = images_low_res.detach().cpu().numpy()
+
+        if args.dataset_select == "carla":
+            if tuple(args.img_size_low_res)[1] != tuple(args.img_size_high_res)[1]:
+                loss_low_res_part = 0
+            else:
+                low_res_index = range(0, h_high_res, downsampling_factor)
+
+                # Evaluate the loss of low resolution part
+                pred_low_res_part = pred_img[low_res_index, :]
+                loss_low_res_part = np.abs(pred_low_res_part - images_low_res)
+                loss_low_res_part = loss_low_res_part.mean()
+
+                pred_img[low_res_index, :] = images_low_res
+
+            # pred_img = np.flip(pred_img)
+            # images_high_res = np.flip(images_high_res)
+
+            pcd_pred = img_to_pcd_carla(pred_img, maximum_range = 80)
+            pcd_gt = img_to_pcd_carla(images_high_res, maximum_range = 80)
+
+        elif args.dataset_select == "kitti":
+            low_res_index = range(0, h_high_res, downsampling_factor)
+
+            # Evaluate the loss of low resolution part
+            pred_low_res_part = pred_img[low_res_index, :]
+            loss_low_res_part = np.abs(pred_low_res_part - images_low_res)
+            loss_low_res_part = loss_low_res_part.mean()
+
+            pred_img[low_res_index, :] = images_low_res
+
+            if args.keep_close_scan:
+                pred_img[pred_img > 0.25] = 0
+                images_high_res[images_high_res > 0.25] = 0 
+
+            # 3D Evaluation Metrics
+            pcd_pred = img_to_pcd_kitti(pred_img, maximum_range= 80)
+            pcd_gt = img_to_pcd_kitti(images_high_res, maximum_range = 80)
+
+        elif args.dataset_select == "durlar":
+            # Keep the pixel values in low resolution image
+            low_res_index = range(0, h_high_res, downsampling_factor)
+
+            # Evaluate the loss of low resolution part
+            pred_low_res_part = pred_img[low_res_index, :]
+            loss_low_res_part = np.abs(pred_low_res_part - images_low_res)
+            loss_low_res_part = loss_low_res_part.mean()
+
+            pred_img[low_res_index, :] = images_low_res
+            
+
+            pcd_pred = img_to_pcd_durlar(pred_img)
+            pcd_gt = img_to_pcd_durlar(images_high_res)
+            
+        elif args.dataset_select == "nuscenes":
+            rmax = 80
+            low_res_index = range(0, h_high_res, downsampling_factor)
+            mask = np.zeros(pred_img.shape[0], dtype=bool)
+            mask[low_res_index] = True
+            images_high_res[~mask] = torch.nan
+            
+            pred_img[low_res_index, :] = images_low_res
+            pcd_pred = img_to_pcd_nuscenes_torch(pred_img, maximum_range = rmax).squeeze(0)
+            pcd_lr = img_to_pcd_nuscenes_torch(images_high_res, maximum_range = rmax).squeeze(0)
+            valid_mask = ~torch.isnan(pcd_lr).any(dim=-1) 
+            clean_pcd_lr = pcd_lr[valid_mask]
+        else:
+            raise NotImplementedError(f"Cannot find the dataset: {args.dataset_select}")
+
+  
+        if pcd_pred.device != 'cpu':
+            pcd_pred = pcd_pred.detach().cpu().numpy()
+            pcd_gt = pcd_gt.detach().cpu().numpy()
+                
+        # pcd_outputpath = os.path.join(args.output_dir, 'pcd_mc_drop_smaller_noise_threshold')
+        pcd_outputpath = os.path.join(args.output_dir, 'pcd_mc_drop_TULIP')
+        if not os.path.exists(pcd_outputpath):
+            os.makedirs(pcd_outputpath, exist_ok=True)
+        # pcd_all_color = np.vstack((pcd_pred_color, pcd_gt_color))
+
+        # Save using open3d
+        pcd_pred_o3d = o3d.geometry.PointCloud()
+        pcd_pred_o3d.points = o3d.utility.Vector3dVector(pcd_pred)
+        
+        pcd_gt_o3d = o3d.geometry.PointCloud()
+        pcd_gt_o3d.points = o3d.utility.Vector3dVector(clean_pcd_lr)
+        
+        o3d.io.write_point_cloud(os.path.join(pcd_outputpath, f"pred_{image_file_name}.ply"), pcd_pred_o3d)
+        o3d.io.write_point_cloud(os.path.join(pcd_outputpath, f"lr_{image_file_name}.ply"), pcd_gt_o3d)    
+
+
 
 def get_latest_checkpoint(args):
     output_dir = Path(args.output_dir)
