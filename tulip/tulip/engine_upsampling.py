@@ -11,7 +11,7 @@ import torch
 import util.misc as misc
 import util.lr_sched as lr_sched
 from torchvision.utils import make_grid
-
+import open3d as o3d
 from pathlib import Path
 import os
 import numpy as np
@@ -663,11 +663,10 @@ def PCD_MCdrop(data_loader, model, device, log_writer, args=None):
     for batch in tqdm.tqdm(data_loader):
         images_low_res = batch[0]['sample'] # (B=1, C, H, W)
         images_high_res = batch[1]['sample'] # (B=1, C, H, W)
-        image_file_name = os.path.splitext(batch[0]['name'])[0]
+        image_file_name = os.path.splitext(batch[0]['name'][0])[0]
         
         images_low_res = images_low_res.to(device, non_blocking=True)
         images_high_res = images_high_res.to(device, non_blocking=True)
-        global_step += 1
         # compute output
 
         with torch.cuda.amp.autocast():
@@ -786,7 +785,7 @@ def PCD_MCdrop(data_loader, model, device, log_writer, args=None):
   
         if pcd_pred.device != 'cpu':
             pcd_pred = pcd_pred.detach().cpu().numpy()
-            pcd_gt = pcd_gt.detach().cpu().numpy()
+            clean_pcd_lr = clean_pcd_lr.detach().cpu().numpy()
                 
         # pcd_outputpath = os.path.join(args.output_dir, 'pcd_mc_drop_smaller_noise_threshold')
         pcd_outputpath = os.path.join(args.output_dir, 'pcd_mc_drop_TULIP')
@@ -801,7 +800,7 @@ def PCD_MCdrop(data_loader, model, device, log_writer, args=None):
         pcd_gt_o3d = o3d.geometry.PointCloud()
         pcd_gt_o3d.points = o3d.utility.Vector3dVector(clean_pcd_lr)
         
-        o3d.io.write_point_cloud(os.path.join(pcd_outputpath, f"pred_{image_file_name}.ply"), pcd_pred_o3d)
+        o3d.io.write_point_cloud(os.path.join(pcd_outputpath, f"tulippred_{image_file_name}.ply"), pcd_pred_o3d)
         o3d.io.write_point_cloud(os.path.join(pcd_outputpath, f"lr_{image_file_name}.ply"), pcd_gt_o3d)    
 
 

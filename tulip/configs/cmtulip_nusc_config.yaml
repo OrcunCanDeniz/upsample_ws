@@ -54,17 +54,17 @@ batch_size: 16  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
-lr: 0.0005  # From bash script
+lr: 0.002  # From bash script
 blr: 0.001
 min_lr: 0.0
 warmup_epochs: 60  # From bash script
 phase2_start: 0 # 0.2 * epochs
 
 # Checkpoint and logging
-output_dir: './experiment/nusc/FulResHybrid_SingleDepthQueryL1_Phase2_SinglePhaseTrain_NoInit_20251210_003708'
+output_dir: './experiment/nusc/R80_FulResHybrid_SingleDepthQueryL1_SinglePhaseTrain_NoInit_b16'
 log_dir: './output_dir'
 save_frequency: 100
-num_workers: 8
+num_workers: 4
 pin_mem: true
 
 # Evaluation configuration
@@ -77,7 +77,7 @@ grid_size: 0.1
 wandb_disabled: false
 entity: 'pnp_dnp'
 project_name: 'upsample'
-run_name: 'FulResHybrid_SingleDepthQueryL1_Phase2_SinglePhaseTrain_NoInit'
+run_name: 'R80_FulResHybrid_SingleDepthQueryL1_SinglePhaseTrain_NoInit_b16'
 
 # Device configuration
 device: 'cuda'

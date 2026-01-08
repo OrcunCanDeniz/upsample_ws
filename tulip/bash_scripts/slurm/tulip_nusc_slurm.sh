@@ -3,8 +3,8 @@
 #SBATCH --job-name=TULIP_train               # your job name
 #SBATCH --nodes=1                          # 1 node
 #SBATCH --ntasks-per-node=1                # one srun task per node
-#SBATCH --gres=gpu:100:4               # 8 GPUs on that node
-#SBATCH --cpus-per-task=64                  # CPUs for data loading, etc.
+#SBATCH --gres=gpu:a100:3               # 8 GPUs on that node
+#SBATCH --cpus-per-task=48                  # CPUs for data loading, etc.
 #SBATCH --time=24:00:00                    # hh:mm:ss walltime
 #SBATCH --partition=a100                 # GPU partition
 # (no --output/--error here—handled by srun instead)
@@ -35,7 +35,7 @@ BIND_LIST="${CODE_DIR}:${CONTAINER_WS},${DATA_DIR}:${CONTAINER_WS}/data/nuscenes
 export HOST_CA_LINK="/etc/pki/tls/certs/ca-bundle.crt"
 export HOST_CA_REAL="$(readlink -f "$HOST_CA_LINK")"
 export IN_CA="/opt/ssl/cacert.pem"
-BIND_LIST="${BIND_LIST},${HOST_CA_REAL}:${IN_CA}"
+# BIND_LIST="${BIND_LIST},${HOST_CA_REAL}:${IN_CA}"
 
 # Proxies
 export http_proxy="http://proxy.nhr.fau.de:80"

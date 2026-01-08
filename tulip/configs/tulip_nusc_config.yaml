@@ -62,7 +62,7 @@ batch_size: 16  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
-lr: 0.0005  # From bash script
+lr: 0.00075  # From bash script
 blr: 0.001
 min_lr: 0.0
 warmup_epochs: 60  # From bash script
@@ -71,7 +71,7 @@ warmup_epochs: 60  # From bash script
 roll: false
 
 # Checkpoint and logging
-output_dir: './experiment/nuscenes/tulip_base_b16_prepfix'
+output_dir: '/home/vault/iwnt/iwnt159h/tulip_base_4b8_rmax80'
 log_dir: './output_dir'
 save_frequency: 100
 num_workers: 2
@@ -86,8 +86,8 @@ grid_size: 0.1
 # Logging and monitoring
 wandb_disabled: false
 entity: 'pnp_dnp'
-project_name: 'upsample_eval'
-run_name: 'tulip_base_b16_nusc_r55'
+project_name: 'upsample'
+run_name: 'tulip_base_3b8_rmax80Fixed'
 
 # Device configuration
 device: 'cuda'
