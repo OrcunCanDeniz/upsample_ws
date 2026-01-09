@@ -16,87 +16,88 @@ ELEV_DEG_PER_RING_NUCSENES = torch.tensor([-30.67, -29.33, -28., -26.66, -25.33,
 
 class SimpleQueryGenerator(nn.Module):
     """
-    Given feature map from range view, generate nqw*nqh numver of 3D query points in ego frame.
+    Given feature map from range view, generate nqw*nqh number of 3D query points in ego frame.
     
     Args:
         rmax: maximum range in meters used to normalize depths
         C_rv: number of channels in range view feature map
         in_rv_size: size of range view feature map to be processed
         og_rv_size: original size of range view image
-        only_low_res: If True, only low resolution gt depths will be used to generate points. 
-                        If False, range prediction head is used to generate intermediate depths, with resolution of og_rv_size.
+        only_low_res: If True, only low resolution gt depths will be used to generate query vectors, for each vector gt gepth will be used to generate 3D query points . 
+                    If False, query token generation done in the target(upsampled) resolution, then a range prediction head is used to generate depths that will be used to generate 3D query points
     """
     def __init__(self,
                  rmax,
                  C_rv=384,
                  in_rv_size=(2,64),
                  og_rv_size=(32,1024),
-                 only_low_res=False):
+                 only_low_res=False,
+                 dataset_name='nusc'):
         super().__init__()
         
         self.C_rv = C_rv
         self.rmax = rmax     
         self.only_low_res = only_low_res
-        
-        # 1D range proposal head for processing expanded features
-        if not only_low_res:
-            self.range_head = nn.Sequential(
-                                            nn.GroupNorm(num_groups=8, num_channels=C_rv),
-                                            CoordConv2d(C_rv, 64, kernel_size=3, padding=1, bias=True),
-                                            nn.SiLU(inplace=True),
-                                            nn.Conv2d(64, 1, kernel_size=1, bias=False)
-                                        )
+        if dataset_name == 'nusc':
+            self.lr_Hrv = 8
+            self.lr_Wrv = 1024
+            og_rv_size = (32, 1024)
+        elif dataset_name == 'kitti':
+            self.lr_Hrv = 16
+            self.lr_Wrv = 1024
+            og_rv_size = (64, 1024)
         else:
-            self.save_in_rv_size = in_rv_size
-            in_rv_size = (32, 1024)
+            raise ValueError(f"Invalid dataset name: {dataset_name}")
+        self.dataset_name = dataset_name
         
         # Build azimuth and zenith maps by in_rv_size (width spans [-pi, pi))
         self.og_Hrv, self.og_Wrv = int(og_rv_size[0]), int(og_rv_size[1])
         self.in_Hrv, self.in_Wrv = int(in_rv_size[0]), int(in_rv_size[1])
-        self.ds_factor_h = self.og_Hrv // self.in_Hrv
-        self.ds_factor_w = self.og_Wrv // self.in_Wrv
+        self.in_spatial_expand_f_h = (self.lr_Hrv // self.in_Hrv) if only_low_res else (self.og_Hrv // self.in_Hrv)
+        self.in_spatial_expand_f_w = (self.lr_Wrv // self.in_Wrv) if only_low_res else (self.og_Wrv // self.in_Wrv)
         
-        self.n_q_w = int(self.ds_factor_w)
-        self.n_q_h = int(self.ds_factor_h)
-        assert self.n_q_w == self.ds_factor_w, "ogW / inW must be int" 
-        assert self.n_q_h == self.ds_factor_h, "ogH / inH must be int" 
+        self.n_q_w = int(self.in_spatial_expand_f_w)
+        self.n_q_h = int(self.in_spatial_expand_f_h)
+        assert self.n_q_w == self.in_spatial_expand_f_w, "ogW / inW must be int" 
+        assert self.n_q_h == self.in_spatial_expand_f_h, "ogH / inH must be int" 
         
         self.num_q_per_latent_cell = self.n_q_w * self.n_q_h
-        
-        if self.num_q_per_latent_cell > 1:
-            assert self.n_q_w == self.n_q_h, "Only symmetrical expanding supported"
-            num_ups = int(math.log(self.n_q_w, 2))
-            up_layers = [CoordConv2d(C_rv, C_rv, kernel_size=1, padding=0, bias=False)]
-            # TODO Dropouts?
-            for _ in range(num_ups):
-                up_layers.extend([
-                    nn.Conv2d(in_channels=C_rv, out_channels=C_rv*4, kernel_size=(1, 1)),
-                    nn.BatchNorm2d(C_rv*4),
-                    nn.GELU(),
-                    nn.Conv2d(in_channels=C_rv*4, out_channels=C_rv*4, kernel_size=(1, 1)),
-                    nn.PixelShuffle(upscale_factor=2)
-                ])
-            self.spatial_expand = nn.Sequential(*up_layers)
-        
-        self.set_geometry(True)
-        self.low_res_index = range(0, 32, 4)
+
+        if not only_low_res:
+            # 1D range proposal head for processing expanded features
+            self.range_head = nn.Sequential(
+                nn.GroupNorm(num_groups=8, num_channels=C_rv),
+                CoordConv2d(C_rv, 64, kernel_size=3, padding=1, bias=True),
+                nn.SiLU(inplace=True),
+                nn.Conv2d(64, 1, kernel_size=1, bias=False)
+            )
+
+            # Spatial expansion (PixelShuffle) path requires symmetrical upsampling
+            if self.num_q_per_latent_cell > 1:
+                assert self.n_q_w == self.n_q_h, "Only symmetrical expanding supported"
+                num_ups = int(math.log(self.n_q_w, 2))
+                up_layers = [CoordConv2d(C_rv, C_rv, kernel_size=1, padding=0, bias=False)]
+                # TODO Dropouts?
+                for _ in range(num_ups):
+                    up_layers.extend([
+                        nn.Conv2d(in_channels=C_rv, out_channels=C_rv*4, kernel_size=(1, 1)),
+                        nn.BatchNorm2d(C_rv*4),
+                        nn.GELU(),
+                        nn.Conv2d(in_channels=C_rv*4, out_channels=C_rv*4, kernel_size=(1, 1)),
+                        nn.PixelShuffle(upscale_factor=2)
+                    ])
+                self.spatial_expand = nn.Sequential(*up_layers)
+        # Always build geometry without binning at the original range-view resolution.
+        # Any lower-resolution variants should be obtained by subsampling this table.
+        self.set_geometry()
+        self.low_res_index = range(0, og_rv_size[0], 4) # which indices were used to create low res rv
         
         if only_low_res:
             self.u_vec_x = self.u_vec_x[:, :, :, self.low_res_index, :]
             self.u_vec_y = self.u_vec_y[:, :, :, self.low_res_index, :]
             self.u_vec_z = self.u_vec_z[:, :, :, self.low_res_index, :]
-            self.in_Hrv = self.save_in_rv_size[0]
-            self.in_Wrv = self.save_in_rv_size[1]
-            self.ds_factor_h = 8 // self.in_Hrv
-            self.ds_factor_w = 1024 // self.in_Wrv
             
-            self.n_q_w = int(self.ds_factor_w)
-            self.n_q_h = int(self.ds_factor_h)
             
-            assert self.n_q_w == self.ds_factor_w, "ogW / inW must be int" 
-            assert self.n_q_h == self.ds_factor_h, "ogH / inH must be int" 
-            
-            self.num_q_per_latent_cell = self.n_q_w * self.n_q_h
             num_addit_ch = self.C_rv * self.num_q_per_latent_cell
             self.populate_channels = nn.Sequential(
                 nn.Conv2d(in_channels=C_rv, out_channels=num_addit_ch, kernel_size=(1, 1)),
@@ -104,37 +105,33 @@ class SimpleQueryGenerator(nn.Module):
                 nn.GELU(),
                 nn.Conv2d(in_channels=num_addit_ch, out_channels=num_addit_ch, kernel_size=(1, 1)),
             )
-        else:
-            self.ds_factor_h = 32 // self.in_Hrv
-            self.ds_factor_w = 1024 // self.in_Wrv
-            
-            self.n_q_w = int(self.ds_factor_w)
-            self.n_q_h = int(self.ds_factor_h)
-            
-            assert self.n_q_w == self.ds_factor_w, "ogW / inW must be int" 
-            assert self.n_q_h == self.ds_factor_h, "ogH / inH must be int" 
-            
-            self.num_q_per_latent_cell = self.n_q_w * self.n_q_h
-                 
-    def set_geometry(self, no_binning=False):
-        # bin azimuths into Wrv bins
+       
+    def set_geometry(self):
+        """
+        Build per-pixel unit direction vectors on the *original* range-view grid
+        without any angular binning. This produces a canonical table that can
+        be safely subsampled for lower-resolution variants.
+        """
+        # Sanity check: total number of latent samples should not exceed original grid
         assert self.n_q_w * self.in_Wrv <= self.og_Wrv, "Total number  of horizontal samples must be less than or equal to original width"
         az_line = torch.linspace(-math.pi, math.pi, self.og_Wrv + 1)[:-1]
         az_line += (az_line[1] - az_line[0])/2
-        if no_binning:
-            self.az_per_q = az_line[None, :, None].repeat(self.og_Hrv, 1, 1) # (in_Hrv, in_Wrv, n_q_w)
-        else:
-            self.az_binned_ = az_line.reshape(self.in_Wrv, self.n_q_w, -1)
-            self.process_az()
+        # (og_Hrv, og_Wrv, 1)
+        self.az_per_q = az_line[None, :, None].repeat(self.og_Hrv, 1, 1)
 
-        # bin elevations into Hrv bins
         assert self.n_q_h * self.in_Hrv <= self.og_Hrv, "Total number of vertical samples must be less than or equal to original height"
-        elev = torch.deg2rad(ELEV_DEG_PER_RING_NUCSENES.flip(0))
-        if no_binning:
-            self.elev_per_q = elev[:, None, None].repeat(1, self.og_Wrv, 1) # (in_Hrv, in_Wrv, n_q_h)
+        if self.dataset_name == 'nusc':
+            elev = torch.deg2rad(ELEV_DEG_PER_RING_NUCSENES.flip(0))
+        elif self.dataset_name == 'kitti':
+            ang_start_y = 24.8
+            ang_res_y = 26.8 / (self.og_Hrv -1)
+            elev_arr = torch.arange(self.og_Hrv)*ang_res_y - ang_start_y
+            elev = torch.deg2rad(elev_arr) # descending order
         else:
-            self.elev_binned_ = elev.reshape(self.in_Hrv, self.n_q_h, -1)
-            self.process_elev()
+            raise ValueError(f"Invalid dataset name: {self.dataset_name}")
+
+        # (og_Hrv, og_Wrv, 1)
+        self.elev_per_q = elev[:, None, None].repeat(1, self.og_Wrv, 1)
         az = self.az_per_q # (in_Hrv, in_Wrv, n_q_w)
         elev = self.elev_per_q # (in_Hrv, in_Wrv, n_q_h)
         # compute unit vector per range view pixel 
@@ -159,26 +156,6 @@ class SimpleQueryGenerator(nn.Module):
         self.register_buffer("u_vec_x", u_vec_x, persistent=False)
         self.register_buffer("u_vec_y", u_vec_y, persistent=False)
         self.register_buffer("u_vec_z", u_vec_z, persistent=False)
-
-        
-    def process_az(self):
-        # this will process binned azimuth angles to produce useful features
-        # self.az_binned_ is (in_Wrv, n_q_w, ds_factor_w//n_q_w)
-        # get linearly spaced azimuths for each latent pixel
-        assert self.ds_factor_w % self.n_q_w == 0, "in_Wrv must be divisible by n_q_w"
-        
-        az_per_q = self.az_binned_.mean(-1)
-        az_per_q = az_per_q[None, ...]
-        self.az_per_q = az_per_q.repeat(self.in_Hrv, 1, 1) # (in_Hrv, in_Wrv, n_q_w)
-        az_per_pixel = az_per_q.mean(-1) # (in_Hrv, in_Wrv)
-        
-    def process_elev(self):
-        assert self.ds_factor_h % self.n_q_h == 0, "in_Hrv must be divisible by n_q_h"
-        
-        elev_per_q = self.elev_binned_.mean(-1) # (in_Hrv, n_q_h)
-        elev_per_q = elev_per_q[:, None, :] # (in_Hrv, 1, n_q_h)
-        self.elev_per_q = elev_per_q.repeat(1, self.in_Wrv, 1) # (in_Hrv, in_Wrv, n_q_h)
-        elev_per_pixel = elev_per_q.mean(-1) # (in_Hrv, in_Wrv)
 
     def _point_hypothesis(self, x_rv, lr_depths=None, target_depths=None, gt_mixture_weight = 0.0):
         """
@@ -253,32 +230,83 @@ class SimpleQueryGenerator(nn.Module):
         return points, interm_depths, x_ret
 
 if __name__ == "__main__":
-    # Minimal test snippet
+    print("Testing only_low_res=False (default)...")
     
-    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(2,64), og_rv_size=(32,1024))
-    
-    assert qg.az_per_q.shape == (2, 64, 16)
-    assert qg.elev_per_q.shape == (2, 64, 16)
-    
-    del qg
-    
-    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(32,1024), og_rv_size=(32,1024))
-    
+    # Test 1: only_low_res=False with spatial expansion
+    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(2,64), og_rv_size=(32,1024), only_low_res=False)
     assert qg.az_per_q.shape == (32, 1024, 1)
     assert qg.elev_per_q.shape == (32, 1024, 1)
-    
+    assert hasattr(qg, 'range_head'), "range_head should exist for only_low_res=False"
+    assert qg.u_vec_x.shape == (1, 1, 1, 32, 1024), "u_vec_x should have full resolution"
     del qg
     
-    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(16,512), og_rv_size=(32,1024))
+    # Test 2: only_low_res=False without spatial expansion (num_q_per_latent_cell == 1)
+    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(32,1024), og_rv_size=(32,1024), only_low_res=False)
+    assert qg.az_per_q.shape == (32, 1024, 1)
+    assert qg.elev_per_q.shape == (32, 1024, 1)
+    assert qg.num_q_per_latent_cell == 1, "No expansion expected"
+    assert not hasattr(qg, 'spatial_expand'), "spatial_expand should not exist when num_q_per_latent_cell == 1"
+    del qg
     
-    assert qg.az_per_q.shape == (16, 512, 2)
-    assert qg.elev_per_q.shape == (16, 512, 2)
+    # Test 3: only_low_res=False with 2x2 spatial expansion
+    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(16,512), og_rv_size=(32,1024), only_low_res=False)
+    assert qg.az_per_q.shape == (32, 1024, 1)
+    assert qg.elev_per_q.shape == (32, 1024, 1)
+    assert qg.num_q_per_latent_cell == 4, "Should have 2x2 = 4 queries per cell"
+    assert hasattr(qg, 'spatial_expand'), "spatial_expand should exist"
     
     in_t = torch.randn(2, 384, 16, 512)
-
-    pts, interm_depths, q_features = qg(in_t, ret_feats=True)
-
-    assert pts.shape == (2, 32*1024, 3)
-    assert interm_depths.shape == (2, 1, 32, 1024)
-    assert q_features.shape == (2, 384, 32, 1024)
-    print("All tests passed!")
+    lr_depths = torch.rand(2, 1, 8, 1024)  # low-res depths: 8 rows (every 4th row of 32)
+    pts, interm_depths, q_features = qg(in_t, ret_feats=True, lr_depths=lr_depths)
+    
+    assert pts.shape == (2, 32*1024, 3), f"Expected (2, 32768, 3), got {pts.shape}"
+    assert interm_depths is not None, "interm_depths should not be None for only_low_res=False"
+    assert interm_depths.shape == (2, 1, 32, 1024), f"Expected (2, 1, 32, 1024), got {interm_depths.shape}"
+    assert q_features.shape == (2, 384, 32, 1024), f"Expected (2, 384, 32, 1024), got {q_features.shape}"
+    del qg
+    
+    print("  ✓ only_low_res=False tests passed")
+    
+    print("\nTesting only_low_res=True...")
+    
+    # Test 4: only_low_res=True with spatial expansion (asymmetric allowed)
+    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(2,64), og_rv_size=(32,1024), only_low_res=True)
+    assert qg.az_per_q.shape == (32, 1024, 1), "Geometry should be built at full resolution"
+    assert qg.elev_per_q.shape == (32, 1024, 1)
+    assert not hasattr(qg, 'range_head'), "range_head should not exist for only_low_res=True"
+    assert not hasattr(qg, 'spatial_expand'), "spatial_expand should not exist for only_low_res=True"
+    assert hasattr(qg, 'populate_channels'), "populate_channels should exist for only_low_res=True"
+    # After subsampling, u_vec should have low-res height
+    lr_Hrv = len(qg.low_res_index)  # Should be 8 for nusc (0, 4, 8, ..., 28)
+    assert qg.u_vec_x.shape == (1, 1, 1, lr_Hrv, 1024), f"Expected (1, 1, 1, {lr_Hrv}, 1024), got {qg.u_vec_x.shape}"
+    assert qg.n_q_h == 4 and qg.n_q_w == 16, "Asymmetric expansion should be allowed"
+    assert qg.num_q_per_latent_cell == 64, "Should have 4*16 = 64 queries per cell"
+    
+    in_t = torch.randn(2, 384, 2, 64)
+    lr_depths = torch.rand(2, 1, lr_Hrv, 1024)  # low-res depths matching subsampled geometry
+    pts, interm_depths, q_features = qg(in_t, ret_feats=True, lr_depths=lr_depths)
+    
+    assert pts.shape == (2, lr_Hrv*1024, 3), f"Expected (2, {lr_Hrv*1024}, 3), got {pts.shape}"
+    assert interm_depths is None, "interm_depths should be None for only_low_res=True"
+    assert q_features.shape == (2, 384, lr_Hrv, 1024), f"Expected (2, 384, {lr_Hrv}, 1024), got {q_features.shape}"
+    del qg
+    
+    # Test 5: only_low_res=True without spatial expansion
+    qg = SimpleQueryGenerator(rmax=51.2, C_rv=384, in_rv_size=(8,1024), og_rv_size=(32,1024), only_low_res=True)
+    assert qg.num_q_per_latent_cell == 1, "No expansion expected (8*1 = 8, matching lr_Hrv)"
+    assert not hasattr(qg, 'populate_channels'), "populate_channels should not exist when num_q_per_latent_cell == 1"
+    lr_Hrv = len(qg.low_res_index)
+    assert qg.u_vec_x.shape == (1, 1, 1, lr_Hrv, 1024)
+    
+    in_t = torch.randn(2, 384, 8, 1024)
+    lr_depths = torch.rand(2, 1, lr_Hrv, 1024)
+    pts, interm_depths, q_features = qg(in_t, ret_feats=True, lr_depths=lr_depths)
+    
+    assert pts.shape == (2, lr_Hrv*1024, 3)
+    assert interm_depths is None
+    assert q_features.shape == (2, 384, lr_Hrv, 1024)
+    del qg
+    
+    print("  ✓ only_low_res=True tests passed")
+    
+    print("\nAll tests passed!")
