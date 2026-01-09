@@ -5,7 +5,18 @@ from einops import rearrange
 import torch
 from torch import nn
 import torch.nn.functional as F
-from .coord_conv import CoordConv2d
+
+# Handle both relative import (when used as module) and absolute import (when run as script)
+try:
+    from .coord_conv import CoordConv2d
+except ImportError:
+    # When running as script, import directly from current directory
+    import sys
+    from pathlib import Path
+    # Add current directory to path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from coord_conv import CoordConv2d
+
 import pdb
 
 ELEV_DEG_PER_RING_NUCSENES = torch.tensor([-30.67, -29.33, -28., -26.66, -25.33, -24., -22.67, -21.33,
@@ -97,14 +108,15 @@ class SimpleQueryGenerator(nn.Module):
             self.u_vec_y = self.u_vec_y[:, :, :, self.low_res_index, :]
             self.u_vec_z = self.u_vec_z[:, :, :, self.low_res_index, :]
             
-            
-            num_addit_ch = self.C_rv * self.num_q_per_latent_cell
-            self.populate_channels = nn.Sequential(
-                nn.Conv2d(in_channels=C_rv, out_channels=num_addit_ch, kernel_size=(1, 1)),
-                nn.BatchNorm2d(num_addit_ch),
-                nn.GELU(),
-                nn.Conv2d(in_channels=num_addit_ch, out_channels=num_addit_ch, kernel_size=(1, 1)),
-            )
+            # Only create populate_channels when spatial expansion is needed
+            if self.num_q_per_latent_cell > 1:
+                num_addit_ch = self.C_rv * self.num_q_per_latent_cell
+                self.populate_channels = nn.Sequential(
+                    nn.Conv2d(in_channels=C_rv, out_channels=num_addit_ch, kernel_size=(1, 1)),
+                    nn.BatchNorm2d(num_addit_ch),
+                    nn.GELU(),
+                    nn.Conv2d(in_channels=num_addit_ch, out_channels=num_addit_ch, kernel_size=(1, 1)),
+                )
        
     def set_geometry(self):
         """
@@ -278,6 +290,7 @@ if __name__ == "__main__":
     assert hasattr(qg, 'populate_channels'), "populate_channels should exist for only_low_res=True"
     # After subsampling, u_vec should have low-res height
     lr_Hrv = len(qg.low_res_index)  # Should be 8 for nusc (0, 4, 8, ..., 28)
+    assert lr_Hrv == 8, f"Expected lr_Hrv to be 8, got {lr_Hrv}"
     assert qg.u_vec_x.shape == (1, 1, 1, lr_Hrv, 1024), f"Expected (1, 1, 1, {lr_Hrv}, 1024), got {qg.u_vec_x.shape}"
     assert qg.n_q_h == 4 and qg.n_q_w == 16, "Asymmetric expansion should be allowed"
     assert qg.num_q_per_latent_cell == 64, "Should have 4*16 = 64 queries per cell"
