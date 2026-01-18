@@ -7,3 +7,4 @@ tulip/output_dir
 *.pth
 **/log.txt
 tulip/data/
+.DS_Store
