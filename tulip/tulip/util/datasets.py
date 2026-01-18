@@ -21,12 +21,8 @@ import torch.utils.data as data
 import torch.nn.functional as F
 from pyquaternion import Quaternion
 import mmcv
-from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from PIL import Image
 
-from timm.data import create_transform
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from timm.data.dataset import ImageDataset
 import numpy as np
 
 import os
@@ -37,9 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import torch
-from torchvision.datasets.vision import VisionDataset
 import pdb
-from pathlib import Path
 import quaternion  # pip install numpy-quaternion
 
 IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp', '.jpx')
@@ -260,11 +254,18 @@ class RVWithImageDataset(Dataset):
         self.info_path = info_file
         self.split = 'train' if 'train' in info_file else 'val'
         info_path = os.path.join(self.data_root, self.info_path)
-        self.infos = mmcv.load(info_path)
-        self.cam_names = [
+        
+        if 'nuscenes' in info_file:
+            self.cam_names = [
                 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT', 'CAM_BACK',
                 'CAM_BACK_LEFT', 'CAM_FRONT_LEFT'
             ]
+        elif 'kitti' in info_file:
+            self.cam_names = [ 'image_02' ]
+        else:
+            raise ValueError(f"Invalid info file: {info_file}")
+
+        self.infos = mmcv.load(info_path)
         self.high_res_transform = high_res_transform
         self.low_res_transform = low_res_transform
         self.loader = loader
@@ -273,7 +274,6 @@ class RVWithImageDataset(Dataset):
         self.img_std = np.array(img_conf['img_std'], np.float32)
         self.to_rgb = img_conf.get('to_rgb', True)
         self.final_dim = final_dim
-        self.max_range = 55
         self.min_range = 0
         self.depth_target_size = (2,64)
         
