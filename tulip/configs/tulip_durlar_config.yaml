@@ -61,7 +61,7 @@ evaluation:
 # Logging and monitoring
 logging:
   wandb_disabled: false
-  entity: 'pnp_dnp'
+  entity: 'orcun-msc'
   project_name: 'upsample'
   run_name: 'tulip_base_durlar'
 

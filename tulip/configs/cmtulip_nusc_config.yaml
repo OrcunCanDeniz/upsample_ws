@@ -75,7 +75,7 @@ grid_size: 0.1
 
 # Logging and monitoring
 wandb_disabled: false
-entity: 'pnp_dnp'
+entity: 'orcun-msc'
 project_name: 'upsample'
 run_name: 'R80_FulResHybrid_SingleDepthQueryL1_SinglePhaseTrain_NoInit_b16'
 
