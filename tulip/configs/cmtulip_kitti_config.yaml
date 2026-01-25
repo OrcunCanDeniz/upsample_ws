@@ -2,47 +2,71 @@
 # This file shows how to configure TULIP for KITTI dataset
 
 # Model selection and architecture
-model_select: 'tulip_base'  # Use base TULIP model for KITTI
+model_select: 'CMTULIP'  # Use base TULIP model for KITTI
 window_size: [2, 8]
+depths: [2,6,2]
 patch_size: [1, 4]
 pixel_shuffle: true  # improve
 circular_padding: true  # improve
 patch_unmerging: true  # improve
 swin_v2: false
+im2col_step: 288
+lss_weights_path: '' 
+final_dim: [370, 1224]
 
+# Backbone configuration for KITTI
+backbone:
+  # Image backbone configuration
+  num_cams: 1
+  img_backbone_conf:
+    type: 'ResNet'
+    depth: 50
+    frozen_stages: 0
+    out_indices: [0, 1, 2, 3]
+    norm_eval: false
+    init_cfg:
+      type: 'Pretrained'
+      checkpoint: 'torchvision://resnet50'
+  
+  # Image neck configuration
+  img_neck_conf:
+    type: 'FPN'
+    in_channels: [256, 512, 1024, 2048]
+    out_channels: 128
+    start_level: 0
+    add_extra_convs: 'on_output'
+    num_outs: 4
+    relu_before_extra_convs: True
 
 # Dataset configuration for KITTI
-dataset_select: 'kitti'
+dataset_select: 'kitti_with_image'
 img_size_low_res: [16, 1024]  # KITTI dimensions from bash script
 img_size_high_res: [64, 1024]
 in_chans: 1
 data_path_low_res: './data/kitti/'
-data_path_high_res: './data/kitti/'
 
 # Data processing options
 save_pcd: false  # Save PCD output for KITTI evaluation
-log_transform: true  # improve
+log_transform: false  # improve
 keep_close_scan: false
 keep_far_scan: false
 
-# Training configuration 4gpu => lr = 5e-4 * 2
-batch_size: 16  # From bash script
+# Training configuration
+batch_size: 8  # From bash script
 epochs: 600
 accum_iter: 1
 weight_decay: 0.01  # From bash script
-lr: 0.001  # From bash script
+lr: 0.001  # lr=0.0005 for 4gpus x 8 batch size = 32 effective batch size we have 8gpus and batch size 8
 blr: 0.001
 min_lr: 0.0
 warmup_epochs: 60  # From bash script
-
-# Augmentation
-roll: false
+phase2_start: 0 # 0.2 * epochs
 
 # Checkpoint and logging
-output_dir: './experiment/kitti/tulip_base'
+output_dir: './experiment/kitti/R80_FulResHybrid_SingleDepthQueryL1_SinglePhaseTrain_NoInit_b8_20260124_154039'
 log_dir: './output_dir'
 save_frequency: 100
-num_workers: 2
+num_workers: 1
 pin_mem: true
 
 # Evaluation configuration
@@ -55,7 +79,7 @@ grid_size: 0.1
 wandb_disabled: false
 entity: 'orcun-msc'
 project_name: 'upsample'
-run_name: 'tulip_base_kitti'
+run_name: 'Kitti_R80_FulResHybrid_SingleDepthQueryL1_SinglePhaseTrain_NoInit_b8'
 
 # Device configuration
 device: 'cuda'
