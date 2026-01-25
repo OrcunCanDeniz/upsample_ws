@@ -15,7 +15,7 @@ if ! [[ "$NPROC" =~ ^[0-9]+$ ]] || [[ "$NPROC" -lt 1 ]]; then
 fi
 
 args=(
-    --config ./configs/tulip_kitti_config.yaml
+    --config ./configs/cmtulip_kitti_config.yaml
     )
 
 # Append --eval if second argument is 'eval'
