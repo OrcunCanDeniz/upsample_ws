@@ -41,15 +41,14 @@ class SimpleQueryGenerator(nn.Module):
                  rmax,
                  C_rv=384,
                  in_rv_size=(2,64),
-                 og_rv_size=(32,1024),
                  only_low_res=False,
-                 dataset_name='nusc'):
+                 dataset_name='nuscenes'):
         super().__init__()
         
         self.C_rv = C_rv
         self.rmax = rmax     
         self.only_low_res = only_low_res
-        if dataset_name == 'nusc':
+        if dataset_name == 'nuscenes':
             self.lr_Hrv = 8
             self.lr_Wrv = 1024
             og_rv_size = (32, 1024)
@@ -132,7 +131,7 @@ class SimpleQueryGenerator(nn.Module):
         self.az_per_q = az_line[None, :, None].repeat(self.og_Hrv, 1, 1)
 
         assert self.n_q_h * self.in_Hrv <= self.og_Hrv, "Total number of vertical samples must be less than or equal to original height"
-        if self.dataset_name == 'nusc':
+        if self.dataset_name == 'nuscenes':
             elev = torch.deg2rad(ELEV_DEG_PER_RING_NUCSENES.flip(0))
         elif self.dataset_name == 'kitti':
             ang_start_y = 24.8

@@ -289,6 +289,12 @@ def main(args):
     if config.model_select == "CMTULIP":
         ef_bs = config.batch_size * config.accum_iter * misc.get_world_size() * 6
         print(f"Multiview effective batch size: {ef_bs}")
+        if "nuscenes" in config.dataset_select:
+            dataset_name = 'nuscenes'
+        elif "kitti" in config.dataset_select:
+            dataset_name = 'kitti'
+        else:
+            raise ValueError(f"Invalid dataset name: {config.dataset_select}")
         model = CMTULIP(
             backbone_config=config.backbone,
             img_size=tuple(config.img_size_low_res),
@@ -302,7 +308,8 @@ def main(args):
             circular_padding=config.circular_padding,
             log_transform=config.log_transform,
             patch_unmerging=config.patch_unmerging,
-            lss_weights_path=config.lss_weights_path
+            lss_weights_path=config.lss_weights_path,
+            dataset_name=dataset_name
         )
     else:
         model = tulip.__dict__[config.model_select](

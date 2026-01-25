@@ -54,7 +54,7 @@ def unfreeze_multiview_backbone(model, train_bn: bool = True):
         m.multiview_backbone.img_backbone.apply(_set_bn_eval)  # keep stats frozen
 
 class CMTULIP(TULIP):
-    def __init__(self, backbone_config, lss_weights_path, im2col_step=128, **kwargs):
+    def __init__(self, backbone_config, lss_weights_path, im2col_step=128, dataset_name='nuscenes', **kwargs):
         super(CMTULIP, self).__init__(**kwargs)
 
         self.init = False
@@ -64,11 +64,11 @@ class CMTULIP(TULIP):
         self.max_range = 80.0
         num_img_feat_lvl = backbone_config.img_neck_conf.get('num_outs', 4)
         self.enc_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2, 
-                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
-                                      only_low_res=False)
+                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(8,128),
+                                      only_low_res=False, dataset_name=dataset_name, num_cams=backbone_config.num_cams)
         self.dec_fuser = RV2MVImgAttn(C_rv=192, rmax=self.max_range, msda_points=8, num_layers=2,
-                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(4,128),
-                                      only_low_res=False)
+                                      num_levels=num_img_feat_lvl, im2col_step=im2col_step, in_rv_size=(8,128),
+                                      only_low_res=False, dataset_name=dataset_name, num_cams=backbone_config.num_cams)
         self.register_buffer('range_head_weight', torch.tensor(0.2, dtype=torch.float32), persistent=True)
         
     

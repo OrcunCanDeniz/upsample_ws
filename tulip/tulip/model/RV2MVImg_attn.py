@@ -73,7 +73,8 @@ class FFN(nn.Module):
 class RV2MVImgAttn(nn.Module):
     def __init__(self, C_rv, rmax, embed_dims=128, 
                  msda_points=8, num_cams=6, num_levels=4, num_layers=1, im2col_step=256,
-                 dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024), only_low_res=False):
+                 dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024), only_low_res=False,
+                 dataset_name='nuscenes'):
         super().__init__()
         self.C_rv = C_rv
         self.rmax = rmax
@@ -81,12 +82,11 @@ class RV2MVImgAttn(nn.Module):
         self.num_cams = num_cams
         self.embed_dims = embed_dims
         self.in_Hrv, self.in_Wrv = in_rv_size
-        self.og_Hrv, self.og_Wrv = og_rv_size
         
         self.ref_pts_generator = SimpleQueryGenerator(C_rv=C_rv, rmax=rmax, 
                                                       in_rv_size=in_rv_size,
-                                                      og_rv_size=og_rv_size,
-                                                      only_low_res=only_low_res)
+                                                      only_low_res=only_low_res,
+                                                      dataset_name=dataset_name)
 
         self.proj_q = nn.Sequential(
             nn.Conv2d(C_rv, embed_dims, 1, bias=True), 

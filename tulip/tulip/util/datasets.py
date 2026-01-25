@@ -661,6 +661,32 @@ def build_kitti_upsampling_dataset(is_train, args):
     dataset_concat = PairDataset(dataset_low_res, dataset_high_res)
     return dataset_concat
     
+@register_dataset('kitti_with_image')
+def build_kitti_w_image_upsampling_dataset(is_train, args):
+    input_size = (16,1024)
+    output_size = (64,1024)
+    max_scaler = 80
+    t_low_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
+    t_high_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
+
+    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0]))
+    if output_size[1] // input_size[1] > 1:
+        t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
+
+    if args.log_transform:
+        t_low_res.append(LogTransform())
+        t_high_res.append(LogTransform())
+
+    transform_low_res = transforms.Compose(t_low_res)
+    transform_high_res = transforms.Compose(t_high_res)        
+    
+    info_file = "kitti_upsample_infos_train.pkl" if is_train else "kitti_upsample_infos_val.pkl"
+    print("KITTI root directory:", args.data_path_low_res)
+    dset = RVWithImageDataset(args.data_path_low_res, high_res_transform = transform_high_res, 
+                              low_res_transform = transform_low_res, info_file = info_file,
+                              final_dim = args.final_dim)
+
+    return dset
 
 @register_dataset('carla')
 def build_carla_upsampling_dataset(is_train, args):
