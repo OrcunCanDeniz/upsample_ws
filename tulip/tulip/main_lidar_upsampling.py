@@ -120,6 +120,7 @@ def main(args):
     collate_func = None
     if config.model_select == "CMTULIP":
         from engine_upsampling_w_image import train_one_epoch, evaluate, get_latest_checkpoint, MCdrop, PCD_MCdrop
+        num_cams = 1 if "kitti" in config.dataset_select else 6
         im2col_step = get_config_value(config, 'batch_size') * 6 # assuming cam 6 views
         config.im2col_step = im2col_step
         

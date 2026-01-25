@@ -237,7 +237,7 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "durlar":
                 pred_img = torch.where((pred_img >= 0.3/120) & (pred_img <= 1), pred_img, 0)
-            elif args.dataset_select == "kitti":
+            elif "kitti" in args.dataset_select:
                 pred_img = torch.where((pred_img >= 0) & (pred_img <= 1), pred_img, 0)
             elif args.dataset_select == "nuscenes_with_image":
                 pred_img = torch.where((pred_img >= 2/80) & (pred_img <= 1), pred_img, 0)
@@ -288,7 +288,7 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 pcd_gt = img_to_pcd_nuscenes_torch(images_high_res, maximum_range = rmax).squeeze(0)
                 
 
-            elif args.dataset_select == "kitti":
+            elif "kitti" in args.dataset_select:
                 low_res_index = range(0, h_high_res, downsampling_factor)
 
                 # Evaluate the loss of low resolution part
@@ -363,9 +363,12 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 loss_map_normalized = loss_map_normalized.detach().cpu().numpy()
                 loss_map_normalized = scalarMap_loss_map.to_rgba(loss_map_normalized)[..., :3]
 
-                if images_high_res.device != 'cpu':
-                    images_high_res = images_high_res.detach().cpu().numpy()
-                    pred_img = pred_img.detach().cpu().numpy()
+                if isinstance(images_high_res, torch.Tensor):
+                    if images_high_res.device != 'cpu':
+                        images_high_res = images_high_res.detach().cpu()
+                        pred_img = pred_img.detach().cpu()
+                    images_high_res = images_high_res.numpy()
+                    pred_img = pred_img.numpy()
 
                 images_high_res = scalarMap.to_rgba(images_high_res)[..., :3]
                 pred_img = scalarMap.to_rgba(pred_img)[..., :3]

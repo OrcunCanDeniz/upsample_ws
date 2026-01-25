@@ -565,9 +565,12 @@ def MCdrop(data_loader, model, device, log_writer, args=None):
                 loss_map_normalized = loss_map_normalized.detach().cpu().numpy()
                 loss_map_normalized = scalarMap_loss_map.to_rgba(loss_map_normalized)[..., :3]
 
-                if images_high_res.device != 'cpu':
-                    images_high_res = images_high_res.detach().cpu().numpy()
-                    pred_img = pred_img.detach().cpu().numpy()
+                if isinstance(images_high_res, torch.Tensor):
+                    if images_high_res.device != 'cpu':
+                        images_high_res = images_high_res.detach().cpu()
+                        pred_img = pred_img.detach().cpu()
+                    images_high_res = images_high_res.numpy()
+                    pred_img = pred_img.numpy()
                 
                 images_high_res = scalarMap.to_rgba(images_high_res)[..., :3]
                 pred_img = scalarMap.to_rgba(pred_img)[..., :3]
