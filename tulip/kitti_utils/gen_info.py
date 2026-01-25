@@ -390,7 +390,7 @@ def generate_info(data_root, split_name, sampled_frames):
 
 def main():
     parser = argparse.ArgumentParser(description='Generate info files for KITTI dataset')
-    parser.add_argument('--data_root', type=str, default='./data/KITTI/', 
+    parser.add_argument('--data_root', type=str, default='./data/kitti/', 
                         help='Root directory of KITTI data (default: ./data/KITTI/)')
     parser.add_argument('--num_data_train', type=int, default=21000,
                         help='Number of training samples to generate (default: 21000)')
