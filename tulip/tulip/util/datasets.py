@@ -243,7 +243,7 @@ class RVWithImageDataset(Dataset):
         loader: Callable[[str], Any] = mdim_npy_loader,
         img_conf = dict(img_mean=[123.675, 116.28, 103.53],
                         img_std=[58.395, 57.12, 57.375],
-                        to_rgb=True),
+                        to_rgb=False),
         info_file: str = None,
         final_dim = (256, 704),
     ):
@@ -260,8 +260,10 @@ class RVWithImageDataset(Dataset):
                 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT', 'CAM_BACK',
                 'CAM_BACK_LEFT', 'CAM_FRONT_LEFT'
             ]
+            self.img_transform = self.img_transform_nusc
         elif 'kitti' in info_file:
             self.cam_names = [ 'image_02' ]
+            self.img_transform = self.img_transform_kitti
         else:
             raise ValueError(f"Invalid info file: {info_file}")
 
@@ -272,25 +274,38 @@ class RVWithImageDataset(Dataset):
         
         self.img_mean = np.array(img_conf['img_mean'], np.float32)
         self.img_std = np.array(img_conf['img_std'], np.float32)
-        self.to_rgb = img_conf.get('to_rgb', True)
+        self.to_rgb = img_conf.get('to_rgb', False)
         self.final_dim = final_dim
         self.min_range = 0
         self.depth_target_size = (2,64)
         
-             
-    def img_transform(self, img):
-        W, H = img.size
-        fH, fW = self.final_dim
+    def img_transform_kitti(self, img):
+        W, H = img.size # 1226, 370
+        fH, fW = self.final_dim # [370, 1224] 
         
         if H == fH and W == fW:
             return img, 1.0
         
-        resize_scale = max(fH / H, fW / W)
+        resize_scale_h, resize_scale_w = (fH / H, fW / W) 
+        resize_dims = (int(W * resize_scale_w), int(H * resize_scale_h))
+        
+        # adjust image
+        img = img.resize(resize_dims)
+        return img, (resize_scale_w, resize_scale_h)
+             
+    def img_transform_nusc(self, img):
+        W, H = img.size # 1226, 370
+        fH, fW = self.final_dim # [370, 1224] 
+        
+        if H == fH and W == fW:
+            return img, 1.0
+        
+        resize_scale = max(fH / H, fW / W) 
         resize_dims = (int(W * resize_scale), int(H * resize_scale))
         
         # adjust image
         img = img.resize(resize_dims)
-        return img, resize_scale
+        return img, (resize_scale, resize_scale)
         
     def find_classes(self, directory: str) -> Tuple[List[str], Dict[str, int]]:
         return [""], {"":0}
@@ -355,8 +370,8 @@ class RVWithImageDataset(Dataset):
                 
                 if scale != 1.0:
                     scale_factor = np.eye(4)
-                    scale_factor[0, 0] *= scale
-                    scale_factor[1, 1] *= scale
+                    scale_factor[0, 0] *= scale[0]
+                    scale_factor[1, 1] *= scale[1]
                     lidar2img_rt = scale_factor @ lidar2img_rt
 
                 lidar2img_rts.append(torch.from_numpy(lidar2img_rt).float())
