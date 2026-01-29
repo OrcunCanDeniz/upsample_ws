@@ -73,7 +73,7 @@ class FFN(nn.Module):
 class RV2MVImgAttn(nn.Module):
     def __init__(self, C_rv, rmax, embed_dims=128, 
                  msda_points=8, num_cams=6, num_levels=4, num_layers=1, im2col_step=256,
-                 dropout=0.1, in_rv_size=(32,1024), og_rv_size=(32,1024), only_low_res=False,
+                 dropout=0.1, in_rv_size=(32,1024), only_low_res=False,
                  dataset_name='nuscenes'):
         super().__init__()
         self.C_rv = C_rv
