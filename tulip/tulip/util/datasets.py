@@ -239,7 +239,7 @@ class RVWithImageDataset(Dataset):
         self,
         root: str,
         high_res_transform: Optional[Callable] = None,
-        low_res_transform: Optional[Callable] = None,
+        downsampling_factor: int = 4,
         loader: Callable[[str], Any] = mdim_npy_loader,
         img_conf = dict(img_mean=[123.675, 116.28, 103.53],
                         img_std=[58.395, 57.12, 57.375],
@@ -269,7 +269,7 @@ class RVWithImageDataset(Dataset):
 
         self.infos = mmcv.load(info_path)
         self.high_res_transform = high_res_transform
-        self.low_res_transform = low_res_transform
+        self.downsampling_factor = downsampling_factor
         self.loader = loader
         
         self.img_mean = np.array(img_conf['img_mean'], np.float32)
@@ -430,8 +430,8 @@ class RVWithImageDataset(Dataset):
         #     raise KeyError('range_head_target_path missing in lidar_info')
         # head_target_path = os.path.join(self.data_root, head_target_rel)
         # range_head_target = mdim_npy_loader(head_target_path)[0]
-        low_res_rv = self.low_res_transform(rv_sample)
         high_res_rv = self.high_res_transform(rv_sample)
+        low_res_rv = high_res_rv[:, ::self.downsampling_factor, :]
         
         lidar2ego_mat = tf_mat_sensor_to_ego(sample_info['lidar_info']['calibrated_sensor'])
             
@@ -581,18 +581,11 @@ def build_nuscenes_w_image_upsampling_dataset(is_train, args):
     input_size = (8,1024)
     output_size = (32,1024)
     max_scaler = 80
-    t_low_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
     t_high_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
 
-    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0]))
-    if output_size[1] // input_size[1] > 1:
-        t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
-
     if args.log_transform:
-        t_low_res.append(LogTransform())
         t_high_res.append(LogTransform())
 
-    transform_low_res = transforms.Compose(t_low_res)
     transform_high_res = transforms.Compose(t_high_res)        
     
     info_file = "nuscenes_upsample_infos_train.pkl" if is_train else "nuscenes_upsample_infos_val.pkl"
@@ -604,7 +597,8 @@ def build_nuscenes_w_image_upsampling_dataset(is_train, args):
     else:
         nusc_root = "./data/nuscenes"
     print("Nuscenes root directory:", nusc_root)
-    dset = RVWithImageDataset(nusc_root, high_res_transform = transform_high_res, low_res_transform = transform_low_res, info_file = info_file)
+    dset = RVWithImageDataset(nusc_root, high_res_transform = transform_high_res, 
+                              downsample_factor=output_size[0]//input_size[0], info_file = info_file)
 
     return dset
 
@@ -681,24 +675,17 @@ def build_kitti_w_image_upsampling_dataset(is_train, args):
     input_size = (16,1024)
     output_size = (64,1024)
     max_scaler = 80
-    t_low_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
     t_high_res = [transforms.ToTensor(), ScaleTensor(1/max_scaler), FilterInvalidPixels(min_range=0, max_range=80/max_scaler)]
 
-    t_low_res.append(DownsampleTensor(h_high_res=output_size[0], downsample_factor=output_size[0]//input_size[0]))
-    if output_size[1] // input_size[1] > 1:
-        t_low_res.append(DownsampleTensorWidth(w_high_res=output_size[1], downsample_factor=output_size[1]//input_size[1],))
-
     if args.log_transform:
-        t_low_res.append(LogTransform())
         t_high_res.append(LogTransform())
 
-    transform_low_res = transforms.Compose(t_low_res)
     transform_high_res = transforms.Compose(t_high_res)        
     
     info_file = "kitti_upsample_infos_train.pkl" if is_train else "kitti_upsample_infos_val.pkl"
     print("KITTI root directory:", args.data_path_low_res)
     dset = RVWithImageDataset(args.data_path_low_res, high_res_transform = transform_high_res, 
-                              low_res_transform = transform_low_res, info_file = info_file,
+                              downsampling_factor=output_size[0]//input_size[0], info_file = info_file,
                               final_dim = args.final_dim)
 
     return dset
